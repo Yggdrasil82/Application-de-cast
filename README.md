@@ -4,7 +4,6 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
 
 - **les enceintes Google / Chromecast en Wi-Fi** : Nest Audio, Nest Mini, Chromecast Audio, téléviseurs avec Chromecast, groupes d'enceintes Google Home ;
 - **les lecteurs DLNA/UPnP en Wi-Fi** : Sonos, Freebox Player, TV connectées, amplis et enceintes réseau (Denon/HEOS, Yamaha MusicCast, Bose…) ;
-- **les enceintes Bluetooth** : grâce au routage audio natif d'Android, avec un sélecteur de sortie intégré ;
 - **n'importe quel autre lecteur du réseau** (VLC, Kodi, navigateur web d'un PC ou d'une TV…) grâce à une adresse de flux HTTP.
 
 ## Fonctionnement
@@ -15,7 +14,6 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
                                                                               ├──► Enceinte Google Cast (Wi-Fi)
                                                                               ├──► Lecteur DLNA/UPnP (Wi-Fi)
                                                                               └──► VLC / navigateur / Kodi…
- Bluetooth : Android envoie le son directement à l'enceinte appairée.
 ```
 
 1. `AudioCaptureService` capture le son joué par les autres applications via l'API
@@ -31,13 +29,20 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
 
 ## Utilisation
 
-1. Téléphone et enceinte sur le **même réseau Wi-Fi**.
-2. Ouvrez AudioCast et touchez l'**icône Cast** pour choisir une enceinte (ou un groupe). La capture démarre toute seule.
-   Vous pouvez aussi toucher « Démarrer la diffusion » puis choisir l'enceinte.
-3. Acceptez la demande de capture, puis lancez votre musique dans n'importe quelle application.
-4. Pour un appareil DLNA : touchez « Rechercher les appareils », puis l'appareil voulu.
-5. Pour le Bluetooth : appairez l'enceinte dans les réglages Android, ou touchez « Choisir la sortie audio ».
-6. Pour un autre appareil : ouvrez l'adresse affichée dans VLC (« Ouvrir un flux réseau ») ou dans un navigateur.
+| Accueil | Diffusion en cours | Thème sombre |
+|---|---|---|
+| ![Accueil](docs/captures/accueil.png) | ![Diffusion](docs/captures/diffusion.png) | ![Thème sombre](docs/captures/diffusion-sombre.png) |
+
+1. Téléphone et enceintes sur le **même réseau Wi-Fi**.
+2. Ouvrez AudioCast : les enceintes Google Cast et DLNA apparaissent dans une seule liste
+   (bouton ⟳ pour relancer la recherche).
+3. Touchez une enceinte : la capture démarre, acceptez la demande d'Android puis lancez votre musique.
+   Touchez à nouveau l'enceinte pour l'arrêter ; le gros bouton arrête tout.
+4. Appui long sur un appareil DLNA pour choisir soi-même le format.
+5. Section **Avancé** : adresse du flux pour VLC / navigateur, et journal de diagnostic.
+
+Pour une enceinte Bluetooth, il suffit de l'appairer dans les réglages Android : le téléphone y envoie
+le son directement, sans passer par AudioCast.
 
 ## Limites à connaître
 
@@ -55,7 +60,6 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
 - Décalage : Google Cast garde quelques secondes en mémoire tampon. Le bouton **Resynchroniser**
   relance la lecture pour repartir du direct, et le téléphone ne garde jamais plus de ~2 s
   d'avance pour une enceinte en retard.
-- Le son capturé n'est pas envoyé en Bluetooth par l'application : Android le fait nativement.
 
 ## Télécharger l'APK
 

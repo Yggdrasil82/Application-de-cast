@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AudioCast" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#AAC7FF</item>
+        <item name="colorOnPrimary">#002F65</item>
+        <item name="colorPrimaryContainer">#0B4596</item>
+        <item name="colorOnPrimaryContainer">#D8E6FF</item>
+        <item name="android:statusBarColor">?android:attr/colorBackground</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

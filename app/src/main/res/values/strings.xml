@@ -1,67 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AudioCast</string>
+    <string name="tagline">Le son de votre téléphone sur vos enceintes</string>
 
+    <!-- Carte principale -->
     <string name="start">Démarrer la diffusion</string>
-    <string name="stop">Arrêter</string>
-
-    <string name="resync">Resynchroniser (réduire le décalage)</string>
-    <string name="resync_log">Resynchronisation demandée</string>
-    <string name="section_log">Journal</string>
-    <string name="section_wifi">Wi-Fi · Google Cast</string>
-    <string name="section_bluetooth">Bluetooth</string>
-    <string name="section_other">Autres appareils (VLC, navigateur, Kodi…)</string>
-
-    <string name="status_idle">Diffusion arrêtée</string>
-    <string name="status_error">Erreur : %1$s</string>
-    <plurals name="status_running">
-        <item quantity="one">Diffusion en cours · %d appareil connecté</item>
-        <item quantity="other">Diffusion en cours · %d appareils connectés</item>
+    <string name="stop">Arrêter la diffusion</string>
+    <string name="status_idle">Prêt</string>
+    <string name="status_idle_detail">Touchez une enceinte ci-dessous pour y envoyer le son.</string>
+    <string name="status_running">Diffusion en cours</string>
+    <plurals name="status_running_detail">
+        <item quantity="one">%d appareil reçoit le son</item>
+        <item quantity="other">%d appareils reçoivent le son</item>
     </plurals>
+    <string name="status_error">Erreur</string>
+    <string name="resync">Resynchroniser</string>
+    <string name="resync_log">Resynchronisation demandée</string>
+    <string name="level_ok">Son capté</string>
+    <string name="level_silent">Aucun son capté : lancez une musique. Si elle joue déjà, son application bloque peut-être la capture.</string>
 
-    <string name="cast_hint">Touchez l’icône Cast pour choisir une enceinte Google (Nest, Chromecast, groupe d’enceintes…). Le téléphone et l’enceinte doivent être sur le même Wi-Fi.</string>
-    <string name="cast_connected">Connecté à « %1$s »</string>
+    <!-- Enceintes -->
+    <string name="section_speakers">Enceintes</string>
+    <string name="speakers_refresh">Rechercher les enceintes</string>
+    <string name="speakers_searching">Recherche des enceintes…</string>
+    <string name="speakers_none">Aucune enceinte trouvée. Vérifiez qu’elles sont allumées et sur le même Wi-Fi que le téléphone.</string>
+    <string name="speakers_hint">Touchez une enceinte pour y envoyer le son, touchez-la à nouveau pour l’arrêter. Appui long sur un appareil DLNA : choisir le format.</string>
+    <string name="speaker_cast">Google Cast</string>
+    <string name="speaker_dlna">DLNA / UPnP</string>
+    <string name="speaker_connecting">Connexion…</string>
+    <string name="speaker_connected">Connectée</string>
     <string name="cast_unavailable">Google Cast indisponible : les services Google Play sont requis.</string>
+
+    <!-- Google Cast -->
     <string name="cast_title">Son du téléphone</string>
     <string name="cast_load_failed">chargement refusé (code %1$d)</string>
     <string name="cast_error_player">erreur du lecteur</string>
-    <string name="cast_state_loading">Envoi du flux à l’enceinte…</string>
-    <string name="cast_state_buffering">L’enceinte met le son en mémoire tampon…</string>
-    <string name="cast_state_playing">L’enceinte lit le flux (%1$s)</string>
-    <string name="cast_state_retry">Format refusé, nouvel essai dans un autre format…</string>
-    <string name="cast_state_failed">L’enceinte ne parvient pas à lire le flux : %1$s</string>
+    <string name="cast_state_loading">Envoi du flux…</string>
+    <string name="cast_state_buffering">Mise en mémoire tampon…</string>
+    <string name="cast_state_playing">Lecture en cours (%1$s)</string>
+    <string name="cast_state_retry">Format refusé, nouvel essai…</string>
+    <string name="cast_state_failed">Lecture impossible : %1$s</string>
 
-    <string name="level_ok">Son capté ✔</string>
-    <string name="level_silent">Aucun son capté. Lancez une musique ; si elle joue déjà, cette application bloque peut-être la capture de son son.</string>
-
-    <string name="bluetooth_hint">Android envoie directement le son vers l’enceinte Bluetooth appairée : aucune capture n’est nécessaire. Vous pouvez utiliser le Bluetooth et le Wi-Fi en même temps.</string>
-    <string name="bluetooth_none">Aucune enceinte Bluetooth connectée</string>
-    <string name="bluetooth_connected">Sortie Bluetooth : %1$s</string>
-    <string name="bluetooth_output_switcher">Choisir la sortie audio</string>
-    <string name="bluetooth_settings">Réglages Bluetooth</string>
-
-    <string name="section_dlna">DLNA / UPnP (Sonos, Freebox, TV, amplis…)</string>
-    <string name="dlna_hint">Recherchez les lecteurs DLNA du réseau Wi-Fi puis touchez celui qui doit jouer le son.</string>
-    <string name="dlna_search">Rechercher les appareils</string>
-    <string name="dlna_searching">Recherche en cours…</string>
-    <string name="dlna_none">Aucun lecteur DLNA trouvé. Vérifiez que l’appareil est allumé et sur le même Wi-Fi.</string>
-    <string name="dlna_found">Touchez un appareil pour y envoyer le son (appui long : choisir le format) :</string>
-    <string name="dlna_connecting">Envoi vers « %1$s »… (plusieurs formats peuvent être essayés)</string>
-    <string name="dlna_playing">Lecture sur « %1$s » (%2$s)</string>
-    <string name="dlna_failed">« %1$s » a refusé le flux : %2$s</string>
+    <!-- DLNA -->
+    <string name="dlna_connecting">Essai des formats…</string>
+    <string name="dlna_playing">Lecture en cours (%1$s)</string>
+    <string name="dlna_failed">Refusé : %1$s</string>
     <string name="dlna_no_format">aucun format ne fonctionne (voir le journal)</string>
     <string name="dlna_choose_format">Format pour « %1$s »</string>
     <string name="dlna_no_wifi">Aucun réseau Wi-Fi : impossible d’envoyer le flux.</string>
 
-    <string name="other_hint">Ouvrez cette adresse dans n’importe quel lecteur du même réseau Wi-Fi :</string>
+    <!-- Avancé -->
+    <string name="section_advanced">Avancé</string>
+    <string name="other_title">Adresse du flux</string>
+    <string name="other_hint">À ouvrir dans VLC, Kodi ou un navigateur du même Wi-Fi :</string>
     <string name="copy_url">Copier</string>
     <string name="url_copied">Adresse copiée</string>
+    <string name="section_log">Journal</string>
+    <string name="notes">Certaines applications (Netflix, streaming protégé…) interdisent la capture de leur son. Le Wi-Fi ajoute quelques secondes de décalage : idéal pour la musique, moins pour la vidéo.</string>
 
-    <string name="notes">Remarques : certaines applications (Netflix, certaines applis bancaires ou de streaming protégé) interdisent la capture de leur son. Le Wi-Fi ajoute quelques secondes de latence : idéal pour la musique, moins pour la vidéo.</string>
-
+    <!-- Autorisations et notification -->
     <string name="permission_audio_denied">L’autorisation micro est nécessaire pour capturer le son des applications.</string>
     <string name="projection_denied">Capture refusée : impossible de diffuser le son.</string>
-
     <string name="notification_channel">Diffusion audio</string>
     <string name="notification_starting">Démarrage…</string>
     <string name="notification_running">Diffusion sur %1$s</string>

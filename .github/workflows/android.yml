@@ -55,3 +55,56 @@ jobs:
 
             **Installation** : téléchargez `AudioCast.apk` sur le téléphone (Android 10 ou plus),
             ouvrez-le et autorisez l'installation d'applications inconnues si Android le demande.
+
+  # Captures d'écran dans un émulateur, ajoutées au dépôt (docs/captures) pour le README.
+  screenshots:
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: AudioCast-apk
+
+      - name: Activer KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Captures dans l'émulateur
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash ci/screenshots.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures
+          path: docs/captures
+
+      - name: Ajouter les captures au dépôt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/captures
+          if git diff --cached --quiet; then
+            echo "Captures inchangées"
+            exit 0
+          fi
+          git commit -m "Captures d'écran de l'application [skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          exit 1

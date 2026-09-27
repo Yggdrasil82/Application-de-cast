@@ -3,43 +3,59 @@ package fr.cast.audio
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioDeviceCallback
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
-import android.media.MediaRouter2
+import android.content.res.ColorStateList
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import androidx.mediarouter.media.MediaRouteSelector
+import androidx.mediarouter.media.MediaRouter
+import com.google.android.gms.cast.CastMediaControlIntent
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
 import com.google.android.gms.cast.MediaStatus
-import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import fr.cast.audio.databinding.ActivityMainBinding
+import fr.cast.audio.databinding.ItemSpeakerBinding
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    /** Une enceinte de la liste, quel que soit son protocole. */
+    private data class Speaker(
+        val id: String,
+        val name: String,
+        val kind: Kind,
+        val state: State,
+        val detail: String,
+    ) {
+        enum class Kind { CAST, DLNA }
+        enum class State { IDLE, CONNECTING, ACTIVE }
+    }
+
     private lateinit var binding: ActivityMainBinding
-    private lateinit var audioManager: AudioManager
+    private val stateListener: (StreamState.Snapshot) -> Unit = { render(it) }
+
+    // --- Google Cast ---
     private var castContext: CastContext? = null
     private var castSession: CastSession? = null
+    private var mediaRouter: MediaRouter? = null
+    private val castSelector = MediaRouteSelector.Builder()
+        .addControlCategory(CastMediaControlIntent.categoryForCast(CastMediaControlIntent.DEFAULT_MEDIA_RECEIVER_APPLICATION_ID))
+        .build()
 
     /** URL actuellement envoyée à l'enceinte Cast, pour ne pas la recharger inutilement. */
     private var loadedUrl: String? = null
@@ -50,32 +66,23 @@ class MainActivity : AppCompatActivity() {
     /** État du lecteur de l'enceinte Cast (lecture, mise en mémoire tampon, erreur…). */
     private var castPlayerText: String? = null
 
-    private val remoteCallback = object : RemoteMediaClient.Callback() {
-        override fun onStatusUpdated() {
-            val status = castSession?.remoteMediaClient?.mediaStatus ?: return
-            when (status.playerState) {
-                MediaStatus.PLAYER_STATE_PLAYING ->
-                    castPlayerText = getString(R.string.cast_state_playing, castFormat.name)
-                MediaStatus.PLAYER_STATE_BUFFERING ->
-                    castPlayerText = getString(R.string.cast_state_buffering)
-                MediaStatus.PLAYER_STATE_IDLE ->
-                    if (status.idleReason == MediaStatus.IDLE_REASON_ERROR && loadedUrl != null) {
-                        onCastPlaybackError(getString(R.string.cast_error_player))
-                    }
-            }
-            renderCast()
-        }
-    }
-
-    private val stateListener: (StreamState.Snapshot) -> Unit = { render(it) }
-
+    // --- DLNA ---
     /** Opérations réseau DLNA (découverte, commandes SOAP), exécutées hors du thread principal. */
     private val dlnaExecutor = Executors.newSingleThreadExecutor()
     private var dlnaRenderers: List<DlnaRenderer> = emptyList()
+    private var dlnaSearching = false
+    private var dlnaSearched = false
+
+    /** Lecteur DLNA en cours de connexion, et message affiché sous chaque lecteur. */
+    private var dlnaConnecting: String? = null
+    private val dlnaMessages = mutableMapOf<String, String>()
 
     /** Lecteur DLNA (et format imposé éventuel) choisi alors que la capture n'était pas démarrée. */
     private var dlnaPending: DlnaRenderer? = null
     private var dlnaPendingOffer: DlnaOffer? = null
+
+    /** Mode démonstration (builds debug) : données fictives pour les captures d'écran. */
+    private var demo = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
@@ -108,21 +115,42 @@ class MainActivity : AppCompatActivity() {
         override fun onSessionSuspended(session: CastSession, reason: Int) = onCastDisconnected()
         override fun onSessionStartFailed(session: CastSession, error: Int) = onCastDisconnected()
         override fun onSessionResumeFailed(session: CastSession, error: Int) = onCastDisconnected()
-        override fun onSessionStarting(session: CastSession) {}
+        override fun onSessionStarting(session: CastSession) = renderSpeakers()
         override fun onSessionEnding(session: CastSession) {}
         override fun onSessionResuming(session: CastSession, sessionId: String) {}
     }
 
-    private val audioDeviceCallback = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = renderBluetooth()
-        override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) = renderBluetooth()
+    private val remoteCallback = object : RemoteMediaClient.Callback() {
+        override fun onStatusUpdated() {
+            val status = castSession?.remoteMediaClient?.mediaStatus ?: return
+            when (status.playerState) {
+                MediaStatus.PLAYER_STATE_PLAYING ->
+                    castPlayerText = getString(R.string.cast_state_playing, castFormat.name)
+                MediaStatus.PLAYER_STATE_BUFFERING ->
+                    castPlayerText = getString(R.string.cast_state_buffering)
+                MediaStatus.PLAYER_STATE_IDLE ->
+                    if (status.idleReason == MediaStatus.IDLE_REASON_ERROR && loadedUrl != null) {
+                        onCastPlaybackError(getString(R.string.cast_error_player))
+                    }
+            }
+            renderSpeakers()
+        }
+    }
+
+    private val routerCallback = object : MediaRouter.Callback() {
+        override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) = renderSpeakers()
+        override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) = renderSpeakers()
+        override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) = renderSpeakers()
+        override fun onRouteSelected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) =
+            renderSpeakers()
+        override fun onRouteUnselected(router: MediaRouter, route: MediaRouter.RouteInfo, reason: Int) =
+            renderSpeakers()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        audioManager = getSystemService(AudioManager::class.java)
 
         castContext = try {
             @Suppress("DEPRECATION")
@@ -132,45 +160,43 @@ class MainActivity : AppCompatActivity() {
             null
         }
         if (castContext != null) {
-            CastButtonFactory.setUpMediaRouteButton(applicationContext, binding.castButton)
+            mediaRouter = MediaRouter.getInstance(this)
         } else {
-            binding.castButton.visibility = View.GONE
             binding.castUnavailable.visibility = View.VISIBLE
         }
 
         binding.toggleButton.setOnClickListener {
-            if (StreamState.current.running) {
-                stopCasting()
-            } else {
-                startCapture()
-            }
+            if (StreamState.current.running) stopCasting() else startCapture()
         }
-        binding.copyUrlButton.setOnClickListener { copyUrl() }
-        binding.dlnaSearchButton.setOnClickListener { searchDlna() }
         binding.resyncButton.setOnClickListener { resync() }
-        binding.outputSwitcherButton.setOnClickListener { openOutputSwitcher() }
-        binding.bluetoothSettingsButton.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+        binding.refreshButton.setOnClickListener { searchDlna() }
+        binding.copyUrlButton.setOnClickListener { copyUrl() }
+        binding.advancedToggle.setOnClickListener {
+            val show = binding.advancedGroup.visibility != View.VISIBLE
+            binding.advancedGroup.visibility = if (show) View.VISIBLE else View.GONE
+            binding.advancedToggle.setIconResource(if (show) R.drawable.ic_collapse else R.drawable.ic_expand)
         }
-        binding.outputSwitcherButton.visibility =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) View.VISIBLE else View.GONE
+
+        demo = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_DEMO, false)
+        if (demo) startDemo()
     }
 
     override fun onStart() {
         super.onStart()
         StreamState.addListener(stateListener)
-        audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
+        mediaRouter?.addCallback(castSelector, routerCallback, MediaRouter.CALLBACK_FLAG_REQUEST_DISCOVERY)
         castContext?.sessionManager?.let { manager ->
             manager.addSessionManagerListener(sessionListener, CastSession::class.java)
             manager.currentCastSession?.let { onCastConnected(it) }
         }
-        renderBluetooth()
+        if (!dlnaSearched && !demo) searchDlna()
+        renderSpeakers()
     }
 
     override fun onStop() {
         castSession?.remoteMediaClient?.unregisterCallback(remoteCallback)
+        mediaRouter?.removeCallback(routerCallback)
         StreamState.removeListener(stateListener)
-        audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         castContext?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onStop()
     }
@@ -207,20 +233,34 @@ class MainActivity : AppCompatActivity() {
         projectionLauncher.launch(intent)
     }
 
+    /** Arrête tout : enceintes Cast et DLNA, puis la capture. */
     private fun stopCasting() {
         castSession?.remoteMediaClient?.stop()
         loadedUrl = null
-        activeDlna?.let { renderer ->
-            dlnaExecutor.execute { runCatching { Dlna.stop(renderer) } }
-        }
-        activeDlna = null
-        activeDlnaOffer = null
+        stopDlna()
         dlnaPending = null
-        renderDlnaList()
         AudioCaptureService.stop(this)
     }
 
     // --- Google Cast ---------------------------------------------------------------------------
+
+    private fun castRoutes(): List<MediaRouter.RouteInfo> {
+        val router = mediaRouter ?: return emptyList()
+        return router.routes.filter { !it.isDefault && it.isEnabled && it.matchesSelector(castSelector) }
+    }
+
+    private fun onCastSpeakerClicked(route: MediaRouter.RouteInfo) {
+        val router = mediaRouter ?: return
+        if (router.selectedRoute.id == route.id) {
+            // Deuxième appui : on arrête la diffusion sur cette enceinte.
+            castContext?.sessionManager?.endCurrentSession(true)
+        } else {
+            castFormat = StreamFormat.WAV
+            castPlayerText = null
+            router.selectRoute(route) // le framework Cast ouvre alors la session
+        }
+        renderSpeakers()
+    }
 
     private fun onCastConnected(session: CastSession, autoStart: Boolean = false) {
         castSession?.remoteMediaClient?.unregisterCallback(remoteCallback)
@@ -238,7 +278,7 @@ class MainActivity : AppCompatActivity() {
             loadedUrl = null
             startCapture()
         }
-        renderCast()
+        renderSpeakers()
     }
 
     private fun onCastDisconnected() {
@@ -247,7 +287,7 @@ class MainActivity : AppCompatActivity() {
         loadedUrl = null
         castFormat = StreamFormat.WAV
         castPlayerText = null
-        renderCast()
+        renderSpeakers()
     }
 
     /** L'enceinte n'arrive pas à lire le flux : on retente une fois dans l'autre format. */
@@ -261,7 +301,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             castPlayerText = getString(R.string.cast_state_failed, reason)
         }
-        renderCast()
+        renderSpeakers()
     }
 
     private fun loadOnCastDevice(baseUrl: String?) {
@@ -287,13 +327,16 @@ class MainActivity : AppCompatActivity() {
         loadedUrl = url
         castPlayerText = getString(R.string.cast_state_loading)
         StreamState.log("Google Cast : envoi du flux ${castFormat.name} à ${castSession?.castDevice?.friendlyName}")
+        renderSpeakers()
     }
 
     // --- DLNA / UPnP ----------------------------------------------------------------------------
 
     private fun searchDlna() {
-        binding.dlnaSearchButton.isEnabled = false
-        binding.dlnaStatus.setText(R.string.dlna_searching)
+        if (dlnaSearching) return
+        dlnaSearching = true
+        dlnaSearched = true
+        renderSpeakers()
         dlnaExecutor.execute {
             val found = try {
                 Dlna.discover(applicationContext)
@@ -303,38 +346,32 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
-                binding.dlnaSearchButton.isEnabled = true
-                dlnaRenderers = found
-                binding.dlnaStatus.setText(if (found.isEmpty()) R.string.dlna_none else R.string.dlna_found)
-                renderDlnaList()
+                dlnaSearching = false
+                // On garde le lecteur actif même s'il n'a pas répondu cette fois-ci.
+                val active = activeDlna
+                dlnaRenderers = if (active != null && found.none { it.udn == active.udn }) found + active else found
+                renderSpeakers()
             }
         }
     }
 
-    private fun renderDlnaList() {
-        binding.dlnaList.removeAllViews()
-        for (renderer in dlnaRenderers) {
-            val button = MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle)
-            val active = renderer.udn == activeDlna?.udn
-            button.text = if (active) "▶ ${renderer.name}" else renderer.name
-            button.isAllCaps = false
-            button.setOnClickListener { selectDlna(renderer, null) }
-            button.setOnLongClickListener {
-                chooseDlnaFormat(renderer)
-                true
+    private fun onDlnaSpeakerClicked(renderer: DlnaRenderer) {
+        when {
+            dlnaConnecting == renderer.udn -> return
+            activeDlna?.udn == renderer.udn -> {
+                stopDlna()
+                renderSpeakers()
             }
-            binding.dlnaList.addView(button)
+            else -> selectDlna(renderer, null)
         }
     }
 
     /** Appui long : choisir soi-même le format, si le choix automatique ne donne pas de son. */
     private fun chooseDlnaFormat(renderer: DlnaRenderer) {
-        binding.dlnaStatus.text = getString(R.string.dlna_connecting, renderer.name)
         dlnaExecutor.execute {
             val offers = Dlna.offers(renderer, StreamState::log)
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
-                binding.dlnaStatus.setText(R.string.dlna_found)
                 val labels = offers.map { "${it.format.name} (${it.mimeType})" }.toTypedArray()
                 MaterialAlertDialogBuilder(this)
                     .setTitle(getString(R.string.dlna_choose_format, renderer.name))
@@ -359,10 +396,15 @@ class MainActivity : AppCompatActivity() {
     private fun playOnDlna(renderer: DlnaRenderer, offer: DlnaOffer?) {
         val baseUrl = StreamState.current.baseUrl
         if (baseUrl == null) {
-            binding.dlnaStatus.setText(R.string.dlna_no_wifi)
+            dlnaMessages[renderer.udn] = getString(R.string.dlna_no_wifi)
+            renderSpeakers()
             return
         }
-        binding.dlnaStatus.text = getString(R.string.dlna_connecting, renderer.name)
+        // Un seul lecteur DLNA à la fois : on libère le précédent.
+        activeDlna?.takeIf { it.udn != renderer.udn }?.let { stopDlna() }
+        dlnaConnecting = renderer.udn
+        dlnaMessages[renderer.udn] = getString(R.string.dlna_connecting)
+        renderSpeakers()
         val title = getString(R.string.cast_title)
         dlnaExecutor.execute {
             val result = runCatching {
@@ -375,20 +417,30 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
+                dlnaConnecting = null
                 val chosen = result.getOrNull()
                 if (chosen != null) {
                     activeDlna = renderer
                     activeDlnaOffer = chosen
-                    binding.dlnaStatus.text = getString(R.string.dlna_playing, renderer.name, chosen.format.name)
+                    dlnaMessages[renderer.udn] = getString(R.string.dlna_playing, chosen.format.name)
                 } else {
                     val reason = result.exceptionOrNull()?.let { it.message ?: it.toString() }
                         ?: getString(R.string.dlna_no_format)
                     Log.w(TAG, "Lecture DLNA impossible : $reason")
-                    binding.dlnaStatus.text = getString(R.string.dlna_failed, renderer.name, reason)
+                    dlnaMessages[renderer.udn] = getString(R.string.dlna_failed, reason)
                 }
-                renderDlnaList()
+                renderSpeakers()
             }
         }
+    }
+
+    private fun stopDlna() {
+        activeDlna?.let { renderer ->
+            dlnaMessages.remove(renderer.udn)
+            dlnaExecutor.execute { runCatching { Dlna.stop(renderer) } }
+        }
+        activeDlna = null
+        activeDlnaOffer = null
     }
 
     // --- Resynchronisation ---------------------------------------------------------------------
@@ -405,70 +457,164 @@ class MainActivity : AppCompatActivity() {
         if (renderer != null && offer != null) playOnDlna(renderer, offer)
     }
 
-    // --- Bluetooth -----------------------------------------------------------------------------
-
-    private fun openOutputSwitcher() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            if (MediaRouter2.getInstance(this).showSystemOutputSwitcher()) return
-        }
-        startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-    }
-
-    private fun renderBluetooth() {
-        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .filter { it.type in BLUETOOTH_OUTPUT_TYPES }
-            .map { it.productName.toString() }
-            .distinct()
-        binding.bluetoothStatus.text = if (devices.isEmpty()) {
-            getString(R.string.bluetooth_none)
-        } else {
-            getString(R.string.bluetooth_connected, devices.joinToString(", "))
-        }
-    }
-
     // --- Interface -----------------------------------------------------------------------------
 
+    private var lastRunning: Boolean? = null
+
     private fun render(state: StreamState.Snapshot) {
-        binding.toggleButton.setText(if (state.running) R.string.stop else R.string.start)
-        binding.resyncButton.visibility = if (state.running) View.VISIBLE else View.GONE
-        binding.logText.text = state.log.joinToString("\n").ifEmpty { "—" }
-        binding.statusText.text = when {
-            state.error != null -> getString(R.string.status_error, state.error)
-            !state.running -> getString(R.string.status_idle)
-            state.streamUrl == null -> getString(R.string.notification_no_wifi)
-            else -> resources.getQuantityString(R.plurals.status_running, state.clients, state.clients)
+        val running = state.running
+        binding.toggleButton.setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
+        binding.toggleButton.contentDescription = getString(if (running) R.string.stop else R.string.start)
+        binding.heroCard.setCardBackgroundColor(
+            MaterialColors.getColor(
+                binding.heroCard,
+                if (running) com.google.android.material.R.attr.colorPrimaryContainer
+                else com.google.android.material.R.attr.colorSurfaceContainerHighest,
+            )
+        )
+        binding.statusTitle.setText(
+            when {
+                state.error != null -> R.string.status_error
+                running -> R.string.status_running
+                else -> R.string.status_idle
+            }
+        )
+        binding.statusDetail.text = when {
+            state.error != null -> state.error
+            !running -> getString(R.string.status_idle_detail)
+            state.baseUrl == null -> getString(R.string.notification_no_wifi)
+            else -> resources.getQuantityString(R.plurals.status_running_detail, state.clients, state.clients)
         }
+
+        val percent = (state.level * 100).toInt().coerceIn(0, 100)
+        binding.levelGroup.visibility = if (running) View.VISIBLE else View.GONE
+        binding.levelText.visibility = if (running) View.VISIBLE else View.GONE
+        binding.levelBar.progress = percent
+        binding.levelText.setText(if (percent > 0) R.string.level_ok else R.string.level_silent)
+        binding.resyncButton.visibility = if (running) View.VISIBLE else View.GONE
+
         binding.urlText.text = state.streamUrl ?: "—"
         binding.copyUrlButton.isEnabled = state.streamUrl != null
-        renderLevel(state)
-        if (state.running) loadOnCastDevice(state.baseUrl) else loadedUrl = null
-        if (state.running) {
+        binding.logText.text = state.log.joinToString("\n").ifEmpty { "—" }
+
+        if (demo) return
+        if (running) {
+            loadOnCastDevice(state.baseUrl)
             dlnaPending?.let { renderer ->
                 dlnaPending = null
                 playOnDlna(renderer, dlnaPendingOffer)
             }
-        } else if (activeDlna != null) {
-            activeDlna = null
-            activeDlnaOffer = null
-            binding.dlnaStatus.setText(R.string.dlna_hint)
-            renderDlnaList()
-        }
-        renderCast()
-    }
-
-    private fun renderLevel(state: StreamState.Snapshot) {
-        binding.levelGroup.visibility = if (state.running) View.VISIBLE else View.GONE
-        val percent = (state.level * 100).toInt().coerceIn(0, 100)
-        binding.levelBar.progress = percent
-        binding.levelText.setText(if (percent > 0) R.string.level_ok else R.string.level_silent)
-    }
-
-    private fun renderCast() {
-        val name = castSession?.castDevice?.friendlyName
-        binding.castStatus.text = if (name != null) {
-            listOfNotNull(getString(R.string.cast_connected, name), castPlayerText).joinToString("\n")
         } else {
-            getString(R.string.cast_hint)
+            loadedUrl = null
+            if (activeDlna != null) {
+                activeDlna?.let { dlnaMessages.remove(it.udn) }
+                activeDlna = null
+                activeDlnaOffer = null
+            }
+        }
+        if (lastRunning != running) {
+            lastRunning = running
+            renderSpeakers()
+        }
+    }
+
+    private fun buildSpeakers(): List<Speaker> {
+        if (demo) return demoSpeakers()
+        val speakers = mutableListOf<Speaker>()
+        val selectedId = mediaRouter?.selectedRoute?.id
+        for (route in castRoutes()) {
+            val selected = route.id == selectedId
+            val state = when {
+                !selected -> Speaker.State.IDLE
+                castSession == null || castPlayerText == getString(R.string.cast_state_loading) ->
+                    Speaker.State.CONNECTING
+                else -> Speaker.State.ACTIVE
+            }
+            val detail = when {
+                !selected -> getString(R.string.speaker_cast)
+                castSession == null -> getString(R.string.speaker_connecting)
+                else -> castPlayerText ?: getString(R.string.speaker_connected)
+            }
+            speakers += Speaker(CAST_PREFIX + route.id, route.name, Speaker.Kind.CAST, state, detail)
+        }
+        for (renderer in dlnaRenderers) {
+            val state = when (renderer.udn) {
+                dlnaConnecting -> Speaker.State.CONNECTING
+                activeDlna?.udn -> Speaker.State.ACTIVE
+                else -> Speaker.State.IDLE
+            }
+            val detail = dlnaMessages[renderer.udn] ?: getString(R.string.speaker_dlna)
+            speakers += Speaker(DLNA_PREFIX + renderer.udn, renderer.name, Speaker.Kind.DLNA, state, detail)
+        }
+        return speakers
+    }
+
+    private val speakerViews = mutableMapOf<String, ItemSpeakerBinding>()
+
+    /** Met la liste à jour en réutilisant les vues existantes (pas de clignotement ni de clic perdu). */
+    private fun renderSpeakers() {
+        val speakers = buildSpeakers()
+        val ids = speakers.map { it.id }
+        if (ids != speakerViews.keys.toList()) {
+            binding.speakerList.removeAllViews()
+            speakerViews.clear()
+            for (speaker in speakers) {
+                val item = ItemSpeakerBinding.inflate(layoutInflater, binding.speakerList, false)
+                binding.speakerList.addView(item.root)
+                speakerViews[speaker.id] = item
+            }
+        }
+        for (speaker in speakers) bindSpeaker(speakerViews.getValue(speaker.id), speaker)
+
+        val searching = dlnaSearching && !demo
+        binding.searchProgress.visibility = if (searching) View.VISIBLE else View.GONE
+        binding.refreshButton.visibility = if (searching) View.GONE else View.VISIBLE
+        binding.speakersEmpty.visibility = if (speakers.isEmpty()) View.VISIBLE else View.GONE
+        binding.speakersEmpty.setText(if (searching) R.string.speakers_searching else R.string.speakers_none)
+    }
+
+    private fun bindSpeaker(item: ItemSpeakerBinding, speaker: Speaker) {
+        item.speakerName.text = speaker.name
+        item.speakerDetail.text = speaker.detail
+        item.speakerIcon.setImageResource(
+            if (speaker.kind == Speaker.Kind.CAST) R.drawable.ic_cast else R.drawable.ic_tv
+        )
+        item.speakerProgress.visibility = if (speaker.state == Speaker.State.CONNECTING) View.VISIBLE else View.GONE
+        item.speakerPlaying.visibility = if (speaker.state == Speaker.State.ACTIVE) View.VISIBLE else View.GONE
+
+        val highlighted = speaker.state != Speaker.State.IDLE
+        val card = item.speakerCard
+        card.strokeWidth = resources.getDimensionPixelSize(if (highlighted) R.dimen.stroke_active else R.dimen.stroke_idle)
+        card.strokeColor = MaterialColors.getColor(
+            card,
+            if (highlighted) com.google.android.material.R.attr.colorPrimary
+            else com.google.android.material.R.attr.colorOutlineVariant,
+        )
+        card.setCardBackgroundColor(
+            ColorStateList.valueOf(
+                MaterialColors.getColor(
+                    card,
+                    if (highlighted) com.google.android.material.R.attr.colorPrimaryContainer
+                    else com.google.android.material.R.attr.colorSurface,
+                )
+            )
+        )
+
+        card.setOnClickListener {
+            if (demo) return@setOnClickListener
+            when (speaker.kind) {
+                Speaker.Kind.CAST -> castRoutes()
+                    .firstOrNull { CAST_PREFIX + it.id == speaker.id }
+                    ?.let { onCastSpeakerClicked(it) }
+                Speaker.Kind.DLNA -> dlnaRenderers
+                    .firstOrNull { DLNA_PREFIX + it.udn == speaker.id }
+                    ?.let { onDlnaSpeakerClicked(it) }
+            }
+        }
+        card.setOnLongClickListener {
+            if (demo || speaker.kind != Speaker.Kind.DLNA) return@setOnLongClickListener false
+            dlnaRenderers.firstOrNull { DLNA_PREFIX + it.udn == speaker.id }?.let { chooseDlnaFormat(it) }
+            true
         }
     }
 
@@ -478,19 +624,30 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, R.string.url_copied, Toast.LENGTH_SHORT).show()
     }
 
+    // --- Démonstration (captures d'écran) ------------------------------------------------------
+
+    private fun startDemo() {
+        StreamState.update {
+            it.copy(running = true, baseUrl = "http://192.168.1.42:8765", clients = 1, level = 0.62f, error = null)
+        }
+        StreamState.log("GET /stream.wav ← 192.168.1.30 (CrKey/1.56)")
+        StreamState.log("Google Cast : envoi du flux WAV à Salon")
+    }
+
+    private fun demoSpeakers() = listOf(
+        Speaker("demo-1", "Salon", Speaker.Kind.CAST, Speaker.State.ACTIVE, getString(R.string.cast_state_playing, "WAV")),
+        Speaker("demo-2", "Cuisine", Speaker.Kind.CAST, Speaker.State.IDLE, getString(R.string.speaker_cast)),
+        Speaker("demo-3", "Freebox Player", Speaker.Kind.DLNA, Speaker.State.IDLE, getString(R.string.speaker_dlna)),
+    )
+
     companion object {
         private const val TAG = "MainActivity"
+        private const val CAST_PREFIX = "cast:"
+        private const val DLNA_PREFIX = "dlna:"
+        const val EXTRA_DEMO = "demo"
 
         /** Lecteur DLNA en cours de lecture et format retenu (conservés si l'activité est recréée). */
         private var activeDlna: DlnaRenderer? = null
         private var activeDlnaOffer: DlnaOffer? = null
-
-        private val BLUETOOTH_OUTPUT_TYPES = buildSet {
-            add(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(AudioDeviceInfo.TYPE_BLE_SPEAKER)
-                add(AudioDeviceInfo.TYPE_BLE_HEADSET)
-            }
-        }
     }
 }
