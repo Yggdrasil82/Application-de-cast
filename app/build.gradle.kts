@@ -12,8 +12,21 @@ android {
         // AudioPlaybackCaptureConfiguration (capture du son des autres applis) existe depuis Android 10.
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // En CI, chaque build a un numéro croissant : Android accepte alors la mise à jour par-dessus.
+        val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = buildNumber
+        versionName = "1.0.$buildNumber"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            // Clé fixe versionnée : tous les APK publiés ont la même signature et s'installent
+            // en mise à jour. Clé de développement uniquement, pas pour le Play Store.
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

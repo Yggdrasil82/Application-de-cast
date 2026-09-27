@@ -53,10 +53,16 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
   Le WAV consomme environ 1,5 Mb/s sur le Wi-Fi.
 - Le son capturé n'est pas envoyé en Bluetooth par l'application : Android le fait nativement.
 
-## Compilation
+## Télécharger l'APK
 
-L'APK est compilé automatiquement par GitHub Actions à chaque push
-(onglet **Actions** → dernier build → artefact **AudioCast-apk**).
+**Dernière version :** https://github.com/Yggdrasil82/Application-de-cast/releases/latest/download/AudioCast.apk
+
+Chaque push compile l'APK avec GitHub Actions et le publie dans une
+[Release](https://github.com/Yggdrasil82/Application-de-cast/releases). Les versions successives
+sont signées avec la même clé (`app/debug.keystore`, clé de développement) : une nouvelle version
+s'installe par-dessus l'ancienne.
+
+## Compilation
 
 En local, avec Android Studio ou le SDK Android installé :
 

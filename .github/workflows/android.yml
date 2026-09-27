@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,10 +24,13 @@ jobs:
       - name: Compiler l'APK
         run: ./gradlew --no-daemon assembleDebug lintDebug
 
+      - name: Renommer l'APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk AudioCast.apk
+
       - uses: actions/upload-artifact@v4
         with:
           name: AudioCast-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: AudioCast.apk
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -32,3 +38,20 @@ jobs:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
           if-no-files-found: ignore
+
+      # Chaque push publie une Release : l'APK est téléchargeable directement via
+      # https://github.com/<propriétaire>/<dépôt>/releases/latest/download/AudioCast.apk
+      - name: Publier la Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: AudioCast 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: AudioCast.apk
+          body: |
+            APK de la branche `${{ github.ref_name }}` (commit ${{ github.sha }}).
+
+            **Installation** : téléchargez `AudioCast.apk` sur le téléphone (Android 10 ou plus),
+            ouvrez-le et autorisez l'installation d'applications inconnues si Android le demande.
