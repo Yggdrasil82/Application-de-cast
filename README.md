@@ -63,7 +63,8 @@ le son directement, sans passer par AudioCast.
 
 ## Télécharger l'APK
 
-**Dernière version :** https://github.com/Yggdrasil82/Application-de-cast/releases/latest/download/AudioCast.apk
+**Dernière version :** https://github.com/Yggdrasil82/Application-de-cast/releases/latest
+(fichier `AudioCast-<version>.apk`, par exemple `AudioCast-1.0.7.apk`)
 
 Chaque push compile l'APK avec GitHub Actions et le publie dans une
 [Release](https://github.com/Yggdrasil82/Application-de-cast/releases). Les versions successives

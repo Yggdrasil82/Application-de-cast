@@ -6,7 +6,7 @@ OUT=docs/captures
 mkdir -p "$OUT"
 PKG=fr.cast.audio
 
-adb install -r AudioCast.apk
+adb install -r AudioCast-*.apk
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard || true
 
