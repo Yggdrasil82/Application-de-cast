@@ -62,6 +62,10 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Seul le build le plus récent d'une branche prend des captures.
+    concurrency:
+      group: screenshots-${{ github.ref }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -97,14 +101,20 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/captures
-          if git diff --cached --quiet; then
-            echo "Captures inchangées"
-            exit 0
-          fi
-          git commit -m "Captures d'écran de l'application [skip ci]"
+          # Les captures sont posées sur la dernière version de la branche (pas de conflit
+          # si d'autres commits sont arrivés entre-temps).
+          cp -r docs/captures /tmp/captures
           for i in 1 2 3; do
-            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            git fetch origin "${GITHUB_REF_NAME}"
+            git checkout -f -B captures FETCH_HEAD
+            rm -rf docs/captures && mkdir -p docs && cp -r /tmp/captures docs/captures
+            git add docs/captures
+            if git diff --cached --quiet; then
+              echo "Captures inchangées"
+              exit 0
+            fi
+            git commit -m "Captures d'écran de l'application [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
             sleep 5
           done
           exit 1
