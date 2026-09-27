@@ -30,7 +30,6 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
-import com.google.android.material.color.MaterialColors
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
 import fr.cast.audio.databinding.ActivityMainBinding
@@ -105,6 +104,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Mode démonstration (builds debug) : données fictives pour les captures d'écran. */
     private var demo = false
+    private var demoIdle = false
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
@@ -195,11 +195,11 @@ class MainActivity : AppCompatActivity() {
         }
         binding.resyncButton.setOnClickListener { resync() }
         binding.resumeButton.setOnClickListener { resumeLastSpeaker() }
-        binding.muteSwitch.isChecked = prefs.muteLocal
-        binding.muteSwitch.setOnCheckedChangeListener { _, checked ->
-            prefs.muteLocal = checked
-            if (StreamState.current.running) LocalMute.apply(this, checked)
-            render(StreamState.current)
+        binding.muteButton.setOnClickListener {
+            val mute = !prefs.muteLocal
+            prefs.muteLocal = mute
+            if (StreamState.current.running) LocalMute.apply(this, mute)
+            renderHero()
         }
         binding.refreshButton.setOnClickListener { searchDlna() }
         binding.copyUrlButton.setOnClickListener { copyUrl() }
@@ -217,6 +217,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         demo = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_DEMO, false)
+        demoIdle = demo && intent.getBooleanExtra(EXTRA_DEMO_IDLE, false)
         if (demo) startDemo()
     }
 
@@ -630,44 +631,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun render(state: StreamState.Snapshot) {
         val running = state.running
-        binding.toggleButton.setImageResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
-        binding.toggleButton.contentDescription = getString(if (running) R.string.stop else R.string.start)
-        binding.heroCard.setCardBackgroundColor(
-            MaterialColors.getColor(
-                binding.heroCard,
-                if (running) com.google.android.material.R.attr.colorPrimaryContainer
-                else com.google.android.material.R.attr.colorSurfaceContainerHighest,
-            )
-        )
-        binding.statusTitle.setText(
-            when {
-                state.error != null -> R.string.status_error
-                running -> R.string.status_running
-                else -> R.string.status_idle
-            }
-        )
-        binding.statusDetail.text = when {
-            state.error != null -> state.error
-            !running -> getString(R.string.status_idle_detail)
-            state.baseUrl == null -> getString(R.string.notification_no_wifi)
-            else -> resources.getQuantityString(R.plurals.status_running_detail, state.clients, state.clients)
-        }
-
-        val percent = (state.level * 100).toInt().coerceIn(0, 100)
-        binding.levelGroup.visibility = if (running) View.VISIBLE else View.GONE
-        binding.levelText.visibility = if (running) View.VISIBLE else View.GONE
-        binding.levelBar.progress = percent
-        binding.levelText.setText(
-            when {
-                percent > 0 -> R.string.level_ok
-                prefs.muteLocal -> R.string.level_silent_muted
-                else -> R.string.level_silent
-            }
-        )
-        binding.resyncButton.visibility = if (running) View.VISIBLE else View.GONE
-        val lastName = prefs.lastSpeakerName
-        binding.resumeButton.visibility = if (!running && lastName != null && !demo) View.VISIBLE else View.GONE
-        if (lastName != null) binding.resumeButton.text = getString(R.string.resume_last, lastName)
+        renderHero(state)
 
         binding.urlText.text = state.streamUrl ?: "—"
         binding.copyUrlButton.isEnabled = state.streamUrl != null
@@ -701,6 +665,69 @@ class MainActivity : AppCompatActivity() {
             lastRunning = running
             renderSpeakers()
         }
+    }
+
+    /** Carte verte et grand bouton : état de la diffusion, enceintes actives, niveau du son. */
+    private fun renderHero(state: StreamState.Snapshot = StreamState.current) {
+        val running = state.running
+        val green = ContextCompat.getColor(this, R.color.green)
+        val red = ContextCompat.getColor(this, R.color.red)
+
+        // Grand bouton : vert pour démarrer, rouge pour arrêter.
+        binding.toggleButton.setText(if (running) R.string.stop else R.string.start)
+        binding.toggleButton.setIconResource(if (running) R.drawable.ic_stop else R.drawable.ic_play)
+        binding.toggleButton.backgroundTintList = ColorStateList.valueOf(if (running) red else green)
+
+        val active = buildSpeakers().filter { it.state == Speaker.State.ACTIVE }
+        val percent = (state.level * 100).toInt().coerceIn(0, 100)
+        binding.heroChip.setText(if (running) R.string.hero_chip_running else R.string.hero_chip_idle)
+        when {
+            state.error != null -> {
+                binding.heroTitle.setText(R.string.status_error)
+                binding.heroDetail.text = state.error
+            }
+            !running -> {
+                binding.heroTitle.setText(R.string.hero_idle_title)
+                binding.heroDetail.setText(R.string.hero_idle_detail)
+            }
+            active.isEmpty() -> {
+                binding.heroTitle.setText(R.string.hero_no_speaker)
+                binding.heroDetail.text = if (state.baseUrl == null) {
+                    getString(R.string.notification_no_wifi)
+                } else {
+                    getString(R.string.hero_no_speaker_detail)
+                }
+            }
+            else -> {
+                binding.heroTitle.text = active.joinToString(" + ") { it.name }
+                val protocols = active.map {
+                    when (it.kind) {
+                        Speaker.Kind.CAST -> getString(R.string.speaker_cast)
+                        Speaker.Kind.DLNA -> getString(R.string.speaker_dlna)
+                        Speaker.Kind.AIRPLAY -> getString(R.string.speaker_airplay)
+                    }
+                }.distinct().joinToString(", ")
+                val sound = getString(if (percent > 0) R.string.hero_sound_ok else R.string.hero_sound_none)
+                binding.heroDetail.text = "$protocols · $sound"
+            }
+        }
+
+        binding.levelGroup.visibility = if (running) View.VISIBLE else View.GONE
+        binding.levelBar.progress = percent
+        // Message d'aide seulement quand rien n'est capté.
+        binding.levelText.visibility = if (running && percent == 0) View.VISIBLE else View.GONE
+        binding.levelText.setText(if (prefs.muteLocal) R.string.level_silent_muted else R.string.level_silent)
+
+        binding.resyncButton.visibility = if (running) View.VISIBLE else View.GONE
+        binding.muteButton.setText(if (prefs.muteLocal) R.string.mute_on else R.string.mute_off)
+        binding.muteButton.setIconResource(if (prefs.muteLocal) R.drawable.ic_mute else R.drawable.ic_volume)
+        binding.muteButton.backgroundTintList = ColorStateList.valueOf(
+            if (prefs.muteLocal) 0x33FFFFFF else android.graphics.Color.TRANSPARENT
+        )
+
+        val lastName = if (demo) DEMO_LAST_SPEAKER else prefs.lastSpeakerName
+        binding.resumeButton.visibility = if (!running && lastName != null) View.VISIBLE else View.GONE
+        if (lastName != null) binding.resumeButton.text = getString(R.string.resume_last, lastName)
     }
 
     private fun buildSpeakers(): List<Speaker> {
@@ -776,6 +803,7 @@ class MainActivity : AppCompatActivity() {
         binding.refreshButton.visibility = if (searching) View.GONE else View.VISIBLE
         binding.speakersEmpty.visibility = if (speakers.isEmpty()) View.VISIBLE else View.GONE
         binding.speakersEmpty.setText(if (searching) R.string.speakers_searching else R.string.speakers_none)
+        renderHero()
     }
 
     /** Curseurs de volume en cours de manipulation : on ne les met pas à jour sous le doigt. */
@@ -791,25 +819,28 @@ class MainActivity : AppCompatActivity() {
                 Speaker.Kind.AIRPLAY -> R.drawable.ic_airplay
             }
         )
-        item.speakerProgress.visibility = if (speaker.state == Speaker.State.CONNECTING) View.VISIBLE else View.GONE
-        item.speakerPlaying.visibility = if (speaker.state == Speaker.State.ACTIVE) View.VISIBLE else View.GONE
-
+        val green = ContextCompat.getColor(this, R.color.green)
+        val active = speaker.state == Speaker.State.ACTIVE
         val highlighted = speaker.state != Speaker.State.IDLE
-        val card = item.speakerCard
-        card.strokeWidth = resources.getDimensionPixelSize(if (highlighted) R.dimen.stroke_active else R.dimen.stroke_idle)
-        card.strokeColor = MaterialColors.getColor(
-            card,
-            if (highlighted) com.google.android.material.R.attr.colorPrimary
-            else com.google.android.material.R.attr.colorOutlineVariant,
+
+        // À droite : « Diffuser » (au repos), roue (connexion) ou pastille « En lecture ».
+        item.speakerProgress.visibility = if (speaker.state == Speaker.State.CONNECTING) View.VISIBLE else View.GONE
+        item.speakerChip.visibility = if (active) View.VISIBLE else View.GONE
+        item.speakerAction.visibility = if (speaker.state == Speaker.State.IDLE) View.VISIBLE else View.GONE
+        item.speakerAction.setOnClickListener { if (!demo) onSpeakerClicked(speaker) }
+
+        // Icône dans un carré vert clair, ou vert plein pour l'enceinte en lecture.
+        item.speakerIcon.backgroundTintList = ColorStateList.valueOf(
+            if (active) green else ContextCompat.getColor(this, R.color.green_container)
         )
+        item.speakerIcon.imageTintList = ColorStateList.valueOf(
+            if (active) ContextCompat.getColor(this, R.color.on_green) else green
+        )
+
+        val card = item.speakerCard
+        card.strokeColor = if (highlighted) green else ContextCompat.getColor(this, R.color.card_stroke)
         card.setCardBackgroundColor(
-            ColorStateList.valueOf(
-                MaterialColors.getColor(
-                    card,
-                    if (highlighted) com.google.android.material.R.attr.colorPrimaryContainer
-                    else com.google.android.material.R.attr.colorSurface,
-                )
-            )
+            ContextCompat.getColor(this, if (highlighted) R.color.green_container else R.color.card_bg)
         )
 
         // Volume de l'enceinte active.
@@ -889,18 +920,25 @@ class MainActivity : AppCompatActivity() {
     // --- Démonstration (captures d'écran) ------------------------------------------------------
 
     private fun startDemo() {
+        if (demoIdle) return
         StreamState.update {
-            it.copy(running = true, baseUrl = "http://192.168.1.42:8765", clients = 1, level = 0.62f, error = null)
+            it.copy(running = true, baseUrl = "http://192.168.1.42:8765", clients = 1, level = 0.64f, error = null)
         }
-        StreamState.log("GET /stream.wav ← 192.168.1.30 (CrKey/1.56)")
-        StreamState.log("Google Cast : envoi du flux WAV à Salon")
+        StreamState.log("AirPlay : lecture démarrée sur Freebox Player")
     }
 
-    private fun demoSpeakers() = listOf(
-        Speaker("demo-1", "Salon", Speaker.Kind.CAST, Speaker.State.ACTIVE, getString(R.string.cast_state_playing, "WAV"), 60),
-        Speaker("demo-2", "Cuisine", Speaker.Kind.CAST, Speaker.State.IDLE, getString(R.string.speaker_cast)),
-        Speaker("demo-3", "Freebox Player", Speaker.Kind.AIRPLAY, Speaker.State.IDLE, getString(R.string.speaker_airplay)),
-    )
+    private fun demoSpeakers(): List<Speaker> {
+        val playing = !demoIdle
+        return listOf(
+            Speaker(
+                "demo-1", "Freebox Player", Speaker.Kind.AIRPLAY,
+                if (playing) Speaker.State.ACTIVE else Speaker.State.IDLE,
+                getString(R.string.speaker_airplay), if (playing) 55 else null,
+            ),
+            Speaker("demo-2", "Clé TV Mi", Speaker.Kind.CAST, Speaker.State.IDLE, getString(R.string.speaker_cast)),
+            Speaker("demo-3", "Nest Mini cuisine", Speaker.Kind.CAST, Speaker.State.IDLE, getString(R.string.speaker_cast)),
+        )
+    }
 
     companion object {
         private const val TAG = "MainActivity"
@@ -908,6 +946,8 @@ class MainActivity : AppCompatActivity() {
         private const val DLNA_PREFIX = "dlna:"
         private const val AIRPLAY_PREFIX = "airplay:"
         const val EXTRA_DEMO = "demo"
+        const val EXTRA_DEMO_IDLE = "demo_idle"
+        private const val DEMO_LAST_SPEAKER = "Freebox Player"
         private const val LOG_LINES_SHOWN = 40
 
         /** Lecteur DLNA en cours de lecture et format retenu (conservés si l'activité est recréée). */

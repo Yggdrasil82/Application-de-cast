@@ -42,6 +42,10 @@ adb shell cmd uimode night no
 launch
 shot accueil 8
 
+# 2. À l'arrêt, avec des enceintes (données de démonstration).
+launch --ez demo true --ez demo_idle true
+shot arret 4
+
 # 2. Diffusion en cours (données de démonstration).
 launch --ez demo true
 shot diffusion 4

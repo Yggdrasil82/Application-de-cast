@@ -15,6 +15,18 @@
     </plurals>
     <string name="status_error">Erreur</string>
     <string name="resync">Resynchroniser</string>
+    <string name="hero_chip_idle">Prêt</string>
+    <string name="hero_chip_running">●  En diffusion</string>
+    <string name="hero_idle_title">Prêt à diffuser</string>
+    <string name="hero_idle_detail">Touchez « Diffuser » sur une enceinte ci-dessous.</string>
+    <string name="hero_no_speaker">Aucune enceinte</string>
+    <string name="hero_no_speaker_detail">Choisissez une enceinte ci-dessous</string>
+    <string name="hero_sound_ok">son capté</string>
+    <string name="hero_sound_none">aucun son</string>
+    <string name="mute_on">Téléphone muet</string>
+    <string name="mute_off">Son du téléphone</string>
+    <string name="speaker_cast_action">Diffuser</string>
+    <string name="speaker_playing_chip">●  En lecture</string>
     <string name="mute_local">Couper le son du téléphone</string>
     <string name="resume_last">Reprendre sur « %1$s »</string>
     <string name="resume_not_found">« %1$s » n’est pas (encore) détectée sur le Wi-Fi.</string>

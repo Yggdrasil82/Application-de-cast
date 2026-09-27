@@ -38,9 +38,9 @@ ports de contrôle et de timing, renvoi des paquets perdus. Latence d'environ 2 
 
 ## Utilisation
 
-| Accueil | Diffusion en cours | Thème sombre |
+| À l'arrêt | Diffusion en cours | Thème sombre |
 |---|---|---|
-| ![Accueil](docs/captures/accueil.png) | ![Diffusion](docs/captures/diffusion.png) | ![Thème sombre](docs/captures/diffusion-sombre.png) |
+| ![À l'arrêt](docs/captures/arret.png) | ![Diffusion](docs/captures/diffusion.png) | ![Thème sombre](docs/captures/diffusion-sombre.png) |
 
 1. Téléphone et enceintes sur le **même réseau Wi-Fi**.
 2. Ouvrez AudioCast : les enceintes Google Cast et DLNA apparaissent dans une seule liste
