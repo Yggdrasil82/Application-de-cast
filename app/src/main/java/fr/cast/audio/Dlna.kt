@@ -13,6 +13,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.URLEncoder
 
 /** Lecteur DLNA/UPnP (MediaRenderer) découvert sur le réseau : Sonos, Freebox, TV, amplis… */
 data class DlnaRenderer(
@@ -199,7 +200,8 @@ object Dlna {
         }?.let { offers += DlnaOffer(StreamFormat.L16, StreamFormat.L16.mimeType, it) }
         audio.firstOrNull { mimeOf(it).lowercase() in WAV_MIMES }
             ?.let { offers += DlnaOffer(StreamFormat.WAV, mimeOf(it), it) }
-        audio.firstOrNull { mimeOf(it).lowercase() in AAC_MIMES }
+        // L'AAC en trames ADTS est souvent annoncé sous « audio/mp4 » avec le profil DLNA AAC_ADTS.
+        audio.firstOrNull { mimeOf(it).lowercase() in AAC_MIMES || it.uppercase().contains("PN=AAC_ADTS") }
             ?.let { offers += DlnaOffer(StreamFormat.AAC, mimeOf(it), it) }
         for (format in listOf(StreamFormat.WAV, StreamFormat.AAC, StreamFormat.L16)) {
             if (offers.none { it.format == format }) offers += DlnaOffer(format, format.mimeType)
@@ -221,8 +223,13 @@ object Dlna {
         log: (String) -> Unit,
     ): DlnaOffer? {
         for (offer in offers) {
-            // Adresse sans paramètre : certains lecteurs déduisent le format de l'extension.
-            val url = baseUrl + offer.format.path
+            // Adresse sans paramètre et terminée par l'extension (certains lecteurs s'y fient) ;
+            // le type MIME attendu par le lecteur, s'il diffère, est placé dans le chemin.
+            val url = if (offer.mimeType.equals(offer.format.mimeType, ignoreCase = true)) {
+                baseUrl + offer.format.path
+            } else {
+                baseUrl + "/m/" + URLEncoder.encode(offer.mimeType, "UTF-8") + offer.format.path
+            }
             // Certains lecteurs rejettent en silence un protocolInfo qui ne correspond pas
             // exactement à ce qu'ils annoncent : on essaie plusieurs écritures.
             val variants = listOfNotNull(
@@ -251,7 +258,7 @@ object Dlna {
                     continue
                 }
                 // Adresse non retenue : inutile d'attendre longtemps.
-                val patience = if (retained) PLAY_CHECK_SECONDS else 5
+                val patience = if (retained) PLAY_CHECK_SECONDS else 8
                 if (waitUntilPlaying(renderer, offer.format, isStreaming, log, patience)) {
                     log("${renderer.name} lit le flux en ${offer.format.name}")
                     return offer
@@ -280,7 +287,7 @@ object Dlna {
         }
         val uri = Regex("<CurrentURI>(.*?)</CurrentURI>", RegexOption.DOT_MATCHES_ALL)
             .find(response)?.groupValues?.get(1)?.let(::unescape)?.trim()
-        log(if (uri.isNullOrEmpty()) "Le lecteur n'a pas retenu l'adresse" else "Adresse retenue : $uri")
+        log(if (uri.isNullOrEmpty()) "Le lecteur n'indique pas (encore) d'adresse" else "Adresse retenue : $uri")
         return !uri.isNullOrEmpty()
     }
 

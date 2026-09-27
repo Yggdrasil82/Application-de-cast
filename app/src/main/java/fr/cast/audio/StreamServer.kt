@@ -117,8 +117,16 @@ class StreamServer(
             val parts = requestLine.split(" ")
             val method = parts.getOrNull(0) ?: ""
             val target = parts.getOrNull(1) ?: "/"
-            val path = target.substringBefore('?')
+            val rawPath = target.substringBefore('?')
             val query = target.substringAfter('?', "")
+            // « /m/<type>/stream.xxx » : même flux, servi avec le type MIME exact attendu par le lecteur.
+            var pathMime: String? = null
+            var path = rawPath
+            if (rawPath.startsWith("/m/")) {
+                val rest = rawPath.removePrefix("/m/")
+                pathMime = URLDecoder.decode(rest.substringBefore('/'), "UTF-8").takeIf { MIME_PATTERN.matches(it) }
+                path = "/" + rest.substringAfter('/')
+            }
             val out = socket.getOutputStream()
             if (path != "/favicon.ico") {
                 val agent = userAgent.take(40).ifEmpty { "?" }
@@ -133,7 +141,7 @@ class StreamServer(
                 path.startsWith("/stream") -> {
                     val format = StreamFormat.fromPath(path)
                     // Le lecteur DLNA peut attendre exactement le type qu'il a annoncé (ex. audio/x-wav).
-                    val mimeType = mimeOverride(query) ?: format.mimeType
+                    val mimeType = pathMime ?: mimeOverride(query) ?: format.mimeType
                     writeHeaders(out, "200 OK", mimeType, dlna = true)
                     if (method == "HEAD") return closeQuietly(socket)
                     if (format == StreamFormat.WAV) {
@@ -230,14 +238,17 @@ class StreamServer(
         }
     }
 
-    /** En-tête WAV d'un flux PCM 16 bits de longueur inconnue (tailles au maximum). */
+    /**
+     * En-tête WAV d'un flux PCM 16 bits sans fin. Les tailles sont finies (≈ 2 Go, plus de 3 h
+     * d'audio) : de nombreux lecteurs Android refusent la valeur « inconnue » 0xFFFFFFFF.
+     */
     private fun wavHeader(): ByteArray {
         val sampleRate = AudioCaptureService.SAMPLE_RATE
         val channels = AudioCaptureService.CHANNELS
         val byteRate = sampleRate * channels * 2
         return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray(Charsets.US_ASCII))
-            putInt(-1) // 0xFFFFFFFF : taille inconnue
+            putInt(WAV_DATA_SIZE + 36)
             put("WAVE".toByteArray(Charsets.US_ASCII))
             put("fmt ".toByteArray(Charsets.US_ASCII))
             putInt(16)
@@ -248,12 +259,15 @@ class StreamServer(
             putShort((channels * 2).toShort())
             putShort(16)
             put("data".toByteArray(Charsets.US_ASCII))
-            putInt(-1)
+            putInt(WAV_DATA_SIZE)
         }.array()
     }
 
     companion object {
         private const val TAG = "StreamServer"
+
+        /** Taille annoncée des données WAV : la plus grande valeur signée, multiple de 4 octets. */
+        private const val WAV_DATA_SIZE = (Int.MAX_VALUE - 44) and 3.inv()
         const val DLNA_FEATURES = "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
         // ≈ 2 s d'audio : au-delà, l'enceinte a pris du retard et on jette le plus ancien
         // pour que le décalage ne s'accumule pas.
