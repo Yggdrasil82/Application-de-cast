@@ -13,7 +13,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URL
-import java.net.URLEncoder
 
 /** Lecteur DLNA/UPnP (MediaRenderer) découvert sur le réseau : Sonos, Freebox, TV, amplis… */
 data class DlnaRenderer(
@@ -37,11 +36,10 @@ object Dlna {
     private const val SSDP_ADDRESS = "239.255.255.250"
     private const val SSDP_PORT = 1900
     private const val HTTP_TIMEOUT_MS = 4000
-    private const val PLAY_CHECK_SECONDS = 12
+    private const val PLAY_CHECK_SECONDS = 15
 
     private val WAV_MIMES = setOf("audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave")
     private val AAC_MIMES = setOf("audio/aac", "audio/x-aac", "audio/aacp", "audio/vnd.dlna.adts")
-    private val AUDIO_HINTS = listOf("l16", "wav", "wave", "aac", "adts")
 
     private val SEARCH_TARGETS = listOf(
         "urn:schemas-upnp-org:device:MediaRenderer:1",
@@ -186,8 +184,8 @@ object Dlna {
         if (mimes.isEmpty()) {
             log("${renderer.name} n'indique pas les formats qu'il accepte")
         } else {
-            val interesting = mimes.filter { m -> AUDIO_HINTS.any { it in m.lowercase() } }.distinct()
-            log("${renderer.name} accepte : ${interesting.joinToString(", ").ifEmpty { "aucun format utilisable" }}")
+            val audio = mimes.filter { it.lowercase().startsWith("audio/") }.distinct()
+            log("${renderer.name} accepte : ${audio.joinToString(", ").ifEmpty { "aucun format audio" }}")
         }
         val lower = mimes.map { it.lowercase() }
         val offers = mutableListOf<DlnaOffer>()
@@ -216,31 +214,59 @@ object Dlna {
         log: (String) -> Unit,
     ): DlnaOffer? {
         for (offer in offers) {
-            val url = baseUrl + offer.format.path + "?mime=" + URLEncoder.encode(offer.mimeType, "UTF-8")
-            log("Essai en ${offer.format.name} (${offer.mimeType})")
-            try {
+            // Adresse sans paramètre : certains lecteurs déduisent le format de l'extension.
+            val url = baseUrl + offer.format.path
+            // Certains lecteurs rejettent en silence des métadonnées qui ne leur plaisent pas :
+            // on réessaie alors sans métadonnées.
+            for (withMetadata in listOf(true, false)) {
+                val variant = if (withMetadata) "" else ", sans métadonnées"
+                log("Essai en ${offer.format.name} (${offer.mimeType}$variant)")
                 try {
-                    stop(renderer) // certains lecteurs refusent un nouveau flux pendant une lecture
-                } catch (_: IOException) {
+                    if (transportStateOrNull(renderer) !in listOf(null, "NO_MEDIA_PRESENT", "STOPPED")) {
+                        stopQuietly(renderer) // certains lecteurs refusent un nouveau flux pendant une lecture
+                    }
+                    soap(
+                        renderer.avTransportUrl, renderer.avTransportType, "SetAVTransportURI",
+                        "InstanceID" to "0",
+                        "CurrentURI" to url,
+                        "CurrentURIMetaData" to if (withMetadata) didl(url, offer, title) else "",
+                    )
+                    Thread.sleep(500)
+                    logCurrentUri(renderer, log)
+                    playWithRetry(renderer)
+                } catch (e: IOException) {
+                    log("Refusé : ${e.message}")
+                    continue
                 }
-                soap(
-                    renderer.avTransportUrl, renderer.avTransportType, "SetAVTransportURI",
-                    "InstanceID" to "0",
-                    "CurrentURI" to url,
-                    "CurrentURIMetaData" to didl(url, offer, title),
-                )
-                playWithRetry(renderer)
-            } catch (e: IOException) {
-                log("Refusé : ${e.message}")
-                continue
+                if (waitUntilPlaying(renderer, offer.format, isStreaming, log)) {
+                    log("${renderer.name} lit le flux en ${offer.format.name}")
+                    return offer
+                }
+                log("Pas de lecture en ${offer.format.name}$variant")
             }
-            if (waitUntilPlaying(renderer, offer.format, isStreaming, log)) {
-                log("${renderer.name} lit le flux en ${offer.format.name}")
-                return offer
-            }
-            log("Pas de lecture en ${offer.format.name}, format suivant…")
         }
+        stopQuietly(renderer)
         return null
+    }
+
+    private fun stopQuietly(renderer: DlnaRenderer) {
+        try {
+            stop(renderer)
+        } catch (_: IOException) {
+        }
+    }
+
+    /** Indique si le lecteur a bien retenu l'adresse envoyée (diagnostic). */
+    private fun logCurrentUri(renderer: DlnaRenderer, log: (String) -> Unit) {
+        val response = try {
+            soap(renderer.avTransportUrl, renderer.avTransportType, "GetMediaInfo", "InstanceID" to "0")
+        } catch (e: IOException) {
+            log("GetMediaInfo impossible : ${e.message}")
+            return
+        }
+        val uri = Regex("<CurrentURI>(.*?)</CurrentURI>", RegexOption.DOT_MATCHES_ALL)
+            .find(response)?.groupValues?.get(1)?.let(::unescape)?.trim()
+        log(if (uri.isNullOrEmpty()) "Le lecteur n'a pas retenu l'adresse" else "Adresse retenue : $uri")
     }
 
     fun stop(renderer: DlnaRenderer) {
@@ -268,30 +294,52 @@ object Dlna {
         log: (String) -> Unit,
     ): Boolean {
         var lastState: String? = null
+        var lastStatus: String? = null
         var good = 0
+        var everStreamed = false
         for (second in 1..PLAY_CHECK_SECONDS) {
             Thread.sleep(1000)
-            val state = try {
-                transportState(renderer)
+            val info = try {
+                transportInfo(renderer)
             } catch (_: IOException) {
                 null
             }
+            val state = info?.first
+            val status = info?.second
             val streaming = isStreaming(format)
+            everStreamed = everStreamed || streaming
             if (state != null && state != lastState) {
                 log("État du lecteur : $state")
                 lastState = state
             }
+            if (status != null && status != "OK" && status != lastStatus) {
+                log("Statut du lecteur : $status")
+                lastStatus = status
+            }
             // Sans réponse à GetTransportInfo, on se contente de la connexion au flux.
             good = if (streaming && (state == null || state == "PLAYING")) good + 1 else 0
             if (good >= 3) return true
-            if (second >= 5 && !streaming && state in listOf("STOPPED", "NO_MEDIA_PRESENT")) return false
+            if (status == "ERROR_OCCURRED" && !streaming) return false
+            // Le lecteur a pu mettre du temps à démarrer (ex. ouverture de son lecteur à l'écran) :
+            // on n'abandonne tôt que s'il est venu chercher le flux puis l'a lâché.
+            if (second >= 8 && everStreamed && !streaming && state != "PLAYING") return false
         }
+        if (!everStreamed) log("Le lecteur n'est jamais venu chercher le son sur le téléphone")
         return false
     }
 
-    private fun transportState(renderer: DlnaRenderer): String? {
+    /** État et statut du transport (ex. « PLAYING », « OK »). */
+    private fun transportInfo(renderer: DlnaRenderer): Pair<String?, String?> {
         val response = soap(renderer.avTransportUrl, renderer.avTransportType, "GetTransportInfo", "InstanceID" to "0")
-        return Regex("<CurrentTransportState>(.*?)</CurrentTransportState>").find(response)?.groupValues?.get(1)
+        val state = Regex("<CurrentTransportState>(.*?)</CurrentTransportState>").find(response)?.groupValues?.get(1)
+        val status = Regex("<CurrentTransportStatus>(.*?)</CurrentTransportStatus>").find(response)?.groupValues?.get(1)
+        return state to status
+    }
+
+    private fun transportStateOrNull(renderer: DlnaRenderer): String? = try {
+        transportInfo(renderer).first
+    } catch (_: IOException) {
+        null
     }
 
     /** Types MIME annoncés par le lecteur (3e champ de chaque protocolInfo « http-get:*:mime:… »). */
