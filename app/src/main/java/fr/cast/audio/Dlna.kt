@@ -13,7 +13,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URL
-import java.net.URLEncoder
 
 /** Lecteur DLNA/UPnP (MediaRenderer) découvert sur le réseau : Sonos, Freebox, TV, amplis… */
 data class DlnaRenderer(
@@ -223,13 +222,9 @@ object Dlna {
         log: (String) -> Unit,
     ): DlnaOffer? {
         for (offer in offers) {
-            // Adresse sans paramètre et terminée par l'extension (certains lecteurs s'y fient) ;
-            // le type MIME attendu par le lecteur, s'il diffère, est placé dans le chemin.
-            val url = if (offer.mimeType.equals(offer.format.mimeType, ignoreCase = true)) {
-                baseUrl + offer.format.path
-            } else {
-                baseUrl + "/m/" + URLEncoder.encode(offer.mimeType, "UTF-8") + offer.format.path
-            }
+            // Adresse la plus simple possible (/stream.wav…) : la Freebox ignore les adresses
+            // contenant des caractères encodés (%2F) ou des paramètres.
+            val url = baseUrl + offer.format.path
             // Certains lecteurs rejettent en silence un protocolInfo qui ne correspond pas
             // exactement à ce qu'ils annoncent : on essaie plusieurs écritures.
             val variants = listOfNotNull(
