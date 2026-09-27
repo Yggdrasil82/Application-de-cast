@@ -12,4 +12,6 @@
     <color name="text">#17201B</color>
     <color name="text_muted">#66716B</color>
     <color name="on_green">#FFFFFF</color>
+    <color name="banner_top">#11683D</color>
+    <color name="banner_bottom">#1C9454</color>
 </resources>

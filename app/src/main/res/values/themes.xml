@@ -12,9 +12,9 @@
         <item name="colorOnSurface">@color/text</item>
         <item name="colorOnSurfaceVariant">@color/text_muted</item>
         <item name="colorOutlineVariant">@color/card_stroke</item>
-        <item name="android:statusBarColor">@color/screen_bg</item>
+        <item name="android:statusBarColor">@color/banner_top</item>
         <item name="android:navigationBarColor">@color/screen_bg</item>
-        <item name="android:windowLightStatusBar">@bool/light_bars</item>
+        <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">@bool/light_bars</item>
     </style>
 
