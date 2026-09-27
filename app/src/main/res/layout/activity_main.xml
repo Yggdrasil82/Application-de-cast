@@ -51,6 +51,7 @@
                     android:contentDescription="@string/start"
                     app:backgroundTint="?attr/colorPrimary"
                     app:fabCustomSize="88dp"
+                    app:shapeAppearanceOverlay="@style/ShapeAppearance.AudioCast.Circle"
                     app:tint="?attr/colorOnPrimary"
                     app:maxImageSize="44dp"
                     app:srcCompat="@drawable/ic_play" />

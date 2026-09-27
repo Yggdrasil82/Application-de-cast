@@ -7,6 +7,12 @@ mkdir -p "$OUT"
 PKG=fr.cast.audio
 
 adb install -r AudioCast-*.apk
+
+# L'émulateur du CI est lent juste après le démarrage : on masque les fenêtres
+# « X ne répond pas » et on lui laisse le temps de se stabiliser.
+adb shell settings put global hide_error_dialogs 1
+adb shell settings put secure anr_show_background 0 || true
+sleep 45
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard || true
 
@@ -20,6 +26,9 @@ adb shell am broadcast -a com.android.systemui.demo -e command network -e wifi s
 
 shot() {
   sleep "$2"
+  # Referme une éventuelle fenêtre système restée ouverte.
+  adb shell am broadcast -a android.intent.action.CLOSE_SYSTEM_DIALOGS || true
+  sleep 1
   adb exec-out screencap -p > "$OUT/$1.png"
 }
 
