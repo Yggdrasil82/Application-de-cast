@@ -16,8 +16,27 @@ jobs:
     concurrency:
       group: build-${{ github.ref }}
       cancel-in-progress: false
+    outputs:
+      design: ${{ steps.design.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Les captures d'écran ne sont refaites que si le design a changé (ou à la demande).
+      - name: Le design a-t-il changé ?
+        id: design
+        run: |
+          before="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$before" ] \
+             || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$before" "${{ github.sha }}" \
+             | grep -qE '^(app/src/main/res/|app/src/main/java/fr/cast/audio/MainActivity\.kt|ci/screenshots\.sh)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-java@v4
         with:
@@ -64,7 +83,7 @@ jobs:
   # Captures d'écran dans un émulateur, ajoutées au dépôt (docs/captures) pour le README.
   screenshots:
     needs: build
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request' && needs.build.outputs.design == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Seul le build le plus récent d'une branche prend des captures.
