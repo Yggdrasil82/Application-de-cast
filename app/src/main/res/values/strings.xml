@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AudioCast</string>
+
+    <string name="start">Démarrer la diffusion</string>
+    <string name="stop">Arrêter</string>
+
+    <string name="section_wifi">Wi-Fi · Google Cast</string>
+    <string name="section_bluetooth">Bluetooth</string>
+    <string name="section_other">Autres appareils (VLC, navigateur, Kodi…)</string>
+
+    <string name="status_idle">Diffusion arrêtée</string>
+    <string name="status_error">Erreur : %1$s</string>
+    <plurals name="status_running">
+        <item quantity="one">Diffusion en cours · %d appareil connecté</item>
+        <item quantity="other">Diffusion en cours · %d appareils connectés</item>
+    </plurals>
+
+    <string name="cast_hint">Touchez l’icône Cast pour choisir une enceinte Google (Nest, Chromecast, groupe d’enceintes…). Le téléphone et l’enceinte doivent être sur le même Wi-Fi.</string>
+    <string name="cast_connected">Connecté à « %1$s »</string>
+    <string name="cast_unavailable">Google Cast indisponible : les services Google Play sont requis.</string>
+    <string name="cast_title">Son du téléphone</string>
+    <string name="cast_load_failed">L’enceinte n’a pas pu lire le flux (code %1$d)</string>
+
+    <string name="bluetooth_hint">Android envoie directement le son vers l’enceinte Bluetooth appairée : aucune capture n’est nécessaire. Vous pouvez utiliser le Bluetooth et le Wi-Fi en même temps.</string>
+    <string name="bluetooth_none">Aucune enceinte Bluetooth connectée</string>
+    <string name="bluetooth_connected">Sortie Bluetooth : %1$s</string>
+    <string name="bluetooth_output_switcher">Choisir la sortie audio</string>
+    <string name="bluetooth_settings">Réglages Bluetooth</string>
+
+    <string name="other_hint">Ouvrez cette adresse dans n’importe quel lecteur du même réseau Wi-Fi :</string>
+    <string name="copy_url">Copier</string>
+    <string name="url_copied">Adresse copiée</string>
+
+    <string name="notes">Remarques : certaines applications (Netflix, certaines applis bancaires ou de streaming protégé) interdisent la capture de leur son. Le Wi-Fi ajoute quelques secondes de latence : idéal pour la musique, moins pour la vidéo.</string>
+
+    <string name="permission_audio_denied">L’autorisation micro est nécessaire pour capturer le son des applications.</string>
+    <string name="projection_denied">Capture refusée : impossible de diffuser le son.</string>
+
+    <string name="notification_channel">Diffusion audio</string>
+    <string name="notification_starting">Démarrage…</string>
+    <string name="notification_running">Diffusion sur %1$s</string>
+    <string name="notification_no_wifi">Diffusion en cours, mais aucun réseau Wi-Fi détecté</string>
+</resources>
