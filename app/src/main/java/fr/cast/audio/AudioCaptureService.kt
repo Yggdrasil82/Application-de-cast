@@ -44,7 +44,7 @@ class AudioCaptureService : Service() {
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
-            Log.i(TAG, "MediaProjection arrêtée par le système")
+            StreamState.log("Capture arrêtée par Android")
             stopSelf()
         }
     }
@@ -72,6 +72,7 @@ class AudioCaptureService : Service() {
             start(resultCode, data)
         } catch (e: Exception) {
             Log.e(TAG, "Impossible de démarrer la capture", e)
+            StreamState.log("Échec du démarrage : ${e.message ?: e}")
             StreamState.update { it.copy(running = false, error = e.message ?: e.toString()) }
             stopSelf()
         }
@@ -164,6 +165,7 @@ class AudioCaptureService : Service() {
         val baseUrl = ip?.let { "http://$it:$PORT" }
         StreamState.update { it.copy(running = true, baseUrl = baseUrl, error = null) }
         val url = StreamState.current.streamUrl
+        StreamState.log("Diffusion démarrée : ${baseUrl ?: "aucune adresse Wi-Fi détectée"}")
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
             buildNotification(url?.let { getString(R.string.notification_running, it) }
@@ -274,6 +276,7 @@ class AudioCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        val wasRunning = server != null
         capturing = false
         captureThread?.interrupt()
         captureThread?.join(1000)
@@ -286,6 +289,7 @@ class AudioCaptureService : Service() {
         projection = null
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
+        if (wasRunning) StreamState.log("Diffusion arrêtée")
         StreamState.update { it.copy(running = false, baseUrl = null, clients = 0, level = 0f) }
         super.onDestroy()
     }

@@ -25,7 +25,12 @@ data class DlnaRenderer(
 )
 
 /** Manière de servir le flux à un lecteur : format produit et type MIME annoncé au lecteur. */
-data class DlnaOffer(val format: StreamFormat, val mimeType: String)
+data class DlnaOffer(
+    val format: StreamFormat,
+    val mimeType: String,
+    /** protocolInfo exact annoncé par le lecteur pour ce type (ex. « http-get:*:audio/x-wav:* »). */
+    val sinkProtocolInfo: String? = null,
+)
 
 /**
  * Client DLNA minimal : découverte SSDP et pilotage AVTransport par SOAP.
@@ -180,20 +185,22 @@ object Dlna {
      * puis les autres en dernier recours.
      */
     fun offers(renderer: DlnaRenderer, log: (String) -> Unit = {}): List<DlnaOffer> {
-        val mimes = sinkMimeTypes(renderer)
-        if (mimes.isEmpty()) {
+        val sink = sinkProtocols(renderer)
+        val audio = sink.filter { mimeOf(it).lowercase().startsWith("audio/") }.distinct()
+        if (sink.isEmpty()) {
             log("${renderer.name} n'indique pas les formats qu'il accepte")
         } else {
-            val audio = mimes.filter { it.lowercase().startsWith("audio/") }.distinct()
-            log("${renderer.name} accepte : ${audio.joinToString(", ").ifEmpty { "aucun format audio" }}")
+            log("${renderer.name} accepte : ${audio.joinToString(" | ").ifEmpty { "aucun format audio" }}")
         }
-        val lower = mimes.map { it.lowercase() }
         val offers = mutableListOf<DlnaOffer>()
-        if (lower.any { it.startsWith("audio/l16") && ("rate=" !in it || "rate=48000" in it) }) {
-            offers += DlnaOffer(StreamFormat.L16, StreamFormat.L16.mimeType)
-        }
-        mimes.firstOrNull { it.lowercase() in WAV_MIMES }?.let { offers += DlnaOffer(StreamFormat.WAV, it) }
-        mimes.firstOrNull { it.lowercase() in AAC_MIMES }?.let { offers += DlnaOffer(StreamFormat.AAC, it) }
+        audio.firstOrNull {
+            val mime = mimeOf(it).lowercase()
+            mime.startsWith("audio/l16") && ("rate=" !in mime || "rate=48000" in mime)
+        }?.let { offers += DlnaOffer(StreamFormat.L16, StreamFormat.L16.mimeType, it) }
+        audio.firstOrNull { mimeOf(it).lowercase() in WAV_MIMES }
+            ?.let { offers += DlnaOffer(StreamFormat.WAV, mimeOf(it), it) }
+        audio.firstOrNull { mimeOf(it).lowercase() in AAC_MIMES }
+            ?.let { offers += DlnaOffer(StreamFormat.AAC, mimeOf(it), it) }
         for (format in listOf(StreamFormat.WAV, StreamFormat.AAC, StreamFormat.L16)) {
             if (offers.none { it.format == format }) offers += DlnaOffer(format, format.mimeType)
         }
@@ -216,11 +223,16 @@ object Dlna {
         for (offer in offers) {
             // Adresse sans paramètre : certains lecteurs déduisent le format de l'extension.
             val url = baseUrl + offer.format.path
-            // Certains lecteurs rejettent en silence des métadonnées qui ne leur plaisent pas :
-            // on réessaie alors sans métadonnées.
-            for (withMetadata in listOf(true, false)) {
-                val variant = if (withMetadata) "" else ", sans métadonnées"
-                log("Essai en ${offer.format.name} (${offer.mimeType}$variant)")
+            // Certains lecteurs rejettent en silence un protocolInfo qui ne correspond pas
+            // exactement à ce qu'ils annoncent : on essaie plusieurs écritures.
+            val variants = listOfNotNull(
+                offer.sinkProtocolInfo?.let { "annoncé" to it },
+                "générique" to "http-get:*:${offer.mimeType}:*",
+                "DLNA" to dlnaProtocolInfo(offer),
+            ).distinctBy { it.second }
+            for ((variant, protocolInfo) in variants) {
+                log("Essai en ${offer.format.name}, protocolInfo $variant : $protocolInfo")
+                var retained = true
                 try {
                     if (transportStateOrNull(renderer) !in listOf(null, "NO_MEDIA_PRESENT", "STOPPED")) {
                         stopQuietly(renderer) // certains lecteurs refusent un nouveau flux pendant une lecture
@@ -229,20 +241,22 @@ object Dlna {
                         renderer.avTransportUrl, renderer.avTransportType, "SetAVTransportURI",
                         "InstanceID" to "0",
                         "CurrentURI" to url,
-                        "CurrentURIMetaData" to if (withMetadata) didl(url, offer, title) else "",
+                        "CurrentURIMetaData" to didl(url, protocolInfo, title),
                     )
                     Thread.sleep(500)
-                    logCurrentUri(renderer, log)
+                    retained = checkCurrentUri(renderer, log)
                     playWithRetry(renderer)
                 } catch (e: IOException) {
                     log("Refusé : ${e.message}")
                     continue
                 }
-                if (waitUntilPlaying(renderer, offer.format, isStreaming, log)) {
+                // Adresse non retenue : inutile d'attendre longtemps.
+                val patience = if (retained) PLAY_CHECK_SECONDS else 5
+                if (waitUntilPlaying(renderer, offer.format, isStreaming, log, patience)) {
                     log("${renderer.name} lit le flux en ${offer.format.name}")
                     return offer
                 }
-                log("Pas de lecture en ${offer.format.name}$variant")
+                log("Pas de lecture en ${offer.format.name} ($variant)")
             }
         }
         stopQuietly(renderer)
@@ -256,17 +270,18 @@ object Dlna {
         }
     }
 
-    /** Indique si le lecteur a bien retenu l'adresse envoyée (diagnostic). */
-    private fun logCurrentUri(renderer: DlnaRenderer, log: (String) -> Unit) {
+    /** Vérifie (et note au journal) si le lecteur a bien retenu l'adresse envoyée. */
+    private fun checkCurrentUri(renderer: DlnaRenderer, log: (String) -> Unit): Boolean {
         val response = try {
             soap(renderer.avTransportUrl, renderer.avTransportType, "GetMediaInfo", "InstanceID" to "0")
         } catch (e: IOException) {
             log("GetMediaInfo impossible : ${e.message}")
-            return
+            return true // on ne sait pas : on laisse sa chance au lecteur
         }
         val uri = Regex("<CurrentURI>(.*?)</CurrentURI>", RegexOption.DOT_MATCHES_ALL)
             .find(response)?.groupValues?.get(1)?.let(::unescape)?.trim()
         log(if (uri.isNullOrEmpty()) "Le lecteur n'a pas retenu l'adresse" else "Adresse retenue : $uri")
+        return !uri.isNullOrEmpty()
     }
 
     fun stop(renderer: DlnaRenderer) {
@@ -292,12 +307,13 @@ object Dlna {
         format: StreamFormat,
         isStreaming: (StreamFormat) -> Boolean,
         log: (String) -> Unit,
+        patience: Int,
     ): Boolean {
         var lastState: String? = null
         var lastStatus: String? = null
         var good = 0
         var everStreamed = false
-        for (second in 1..PLAY_CHECK_SECONDS) {
+        for (second in 1..patience) {
             Thread.sleep(1000)
             val info = try {
                 transportInfo(renderer)
@@ -342,8 +358,8 @@ object Dlna {
         null
     }
 
-    /** Types MIME annoncés par le lecteur (3e champ de chaque protocolInfo « http-get:*:mime:… »). */
-    private fun sinkMimeTypes(renderer: DlnaRenderer): List<String> {
+    /** protocolInfo « http-get:*:mime:options » annoncés par le lecteur (GetProtocolInfo, Sink). */
+    private fun sinkProtocols(renderer: DlnaRenderer): List<String> {
         val cmUrl = renderer.connectionManagerUrl ?: return emptyList()
         val cmType = renderer.connectionManagerType ?: return emptyList()
         val sink = try {
@@ -354,18 +370,23 @@ object Dlna {
             null
         } ?: return emptyList()
         return unescape(sink).split(',')
-            .map { it.trim().split(':') }
-            .filter { it.size >= 3 && it[0].equals("http-get", ignoreCase = true) }
-            .map { it[2] }
+            .map { it.trim() }
+            .filter { it.split(':').size >= 3 && it.startsWith("http-get:", ignoreCase = true) }
     }
 
-    private fun didl(url: String, offer: DlnaOffer, title: String): String {
+    private fun mimeOf(protocolInfo: String) = protocolInfo.split(':').getOrElse(2) { "" }
+
+    private fun dlnaProtocolInfo(offer: DlnaOffer): String {
         val profile = if (offer.format == StreamFormat.L16) "DLNA.ORG_PN=LPCM;" else ""
-        val protocolInfo = "http-get:*:${offer.mimeType}:$profile${StreamServer.DLNA_FEATURES}"
+        return "http-get:*:${offer.mimeType}:$profile${StreamServer.DLNA_FEATURES}"
+    }
+
+    private fun didl(url: String, protocolInfo: String, title: String): String {
         return "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
             "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
-            "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
-            "<item id=\"audiocast\" parentID=\"0\" restricted=\"1\">" +
+            "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" " +
+            "xmlns:dlna=\"urn:schemas-dlna-org:metadata-1-0/\">" +
+            "<item id=\"1\" parentID=\"0\" restricted=\"1\">" +
             "<dc:title>${escape(title)}</dc:title>" +
             "<upnp:class>object.item.audioItem.musicTrack</upnp:class>" +
             "<res protocolInfo=\"${escape(protocolInfo)}\">${escape(url)}</res>" +
