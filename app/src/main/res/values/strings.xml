@@ -5,6 +5,9 @@
     <string name="start">Démarrer la diffusion</string>
     <string name="stop">Arrêter</string>
 
+    <string name="resync">Resynchroniser (réduire le décalage)</string>
+    <string name="resync_log">Resynchronisation demandée</string>
+    <string name="section_log">Journal</string>
     <string name="section_wifi">Wi-Fi · Google Cast</string>
     <string name="section_bluetooth">Bluetooth</string>
     <string name="section_other">Autres appareils (VLC, navigateur, Kodi…)</string>
@@ -42,10 +45,12 @@
     <string name="dlna_search">Rechercher les appareils</string>
     <string name="dlna_searching">Recherche en cours…</string>
     <string name="dlna_none">Aucun lecteur DLNA trouvé. Vérifiez que l’appareil est allumé et sur le même Wi-Fi.</string>
-    <string name="dlna_found">Touchez un appareil pour y envoyer le son :</string>
-    <string name="dlna_connecting">Envoi vers « %1$s »…</string>
+    <string name="dlna_found">Touchez un appareil pour y envoyer le son (appui long : choisir le format) :</string>
+    <string name="dlna_connecting">Envoi vers « %1$s »… (plusieurs formats peuvent être essayés)</string>
     <string name="dlna_playing">Lecture sur « %1$s » (%2$s)</string>
     <string name="dlna_failed">« %1$s » a refusé le flux : %2$s</string>
+    <string name="dlna_no_format">aucun format ne fonctionne (voir le journal)</string>
+    <string name="dlna_choose_format">Format pour « %1$s »</string>
     <string name="dlna_no_wifi">Aucun réseau Wi-Fi : impossible d’envoyer le flux.</string>
 
     <string name="other_hint">Ouvrez cette adresse dans n’importe quel lecteur du même réseau Wi-Fi :</string>

@@ -9,6 +9,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.net.URLDecoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ArrayBlockingQueue
@@ -21,8 +22,19 @@ enum class StreamFormat(val path: String, val mimeType: String) {
     /** AAC-LC en trames ADTS : léger, lu par Google Cast, VLC, les navigateurs. */
     AAC("/stream.aac", "audio/aac"),
 
-    /** PCM 16 bits en WAV sans fin : format audio obligatoire des lecteurs DLNA, le plus compatible. */
+    /** PCM 16 bits little-endian dans un conteneur WAV sans fin : Google Cast, la plupart des lecteurs. */
     WAV("/stream.wav", "audio/wav"),
+
+    /** PCM 16 bits big-endian brut (LPCM) : format audio obligatoire de la norme DLNA. */
+    L16("/stream.l16", "audio/L16;rate=48000;channels=2");
+
+    companion object {
+        fun fromPath(path: String) = when {
+            path.endsWith(".wav") -> WAV
+            path.endsWith(".l16") -> L16
+            else -> AAC
+        }
+    }
 }
 
 /**
@@ -32,6 +44,7 @@ enum class StreamFormat(val path: String, val mimeType: String) {
 class StreamServer(
     private val port: Int,
     private val onClientsChanged: (Int) -> Unit,
+    private val onLog: (String) -> Unit = {},
 ) {
     private class Client(val socket: Socket, val format: StreamFormat) {
         // Petite file : si un client prend du retard, on jette les vieilles trames pour limiter la latence.
@@ -94,15 +107,23 @@ class StreamServer(
             socket.tcpNoDelay = true
             val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.ISO_8859_1))
             val requestLine = reader.readLine() ?: return closeQuietly(socket)
-            // On ignore les en-têtes (Range, User-Agent…) : c'est un flux en direct.
+            // Les en-têtes ne servent qu'au journal : c'est un flux en direct, sans reprise (Range).
+            var userAgent = ""
             while (true) {
                 val line = reader.readLine() ?: break
                 if (line.isEmpty()) break
+                if (line.startsWith("user-agent:", ignoreCase = true)) userAgent = line.substringAfter(':').trim()
             }
             val parts = requestLine.split(" ")
             val method = parts.getOrNull(0) ?: ""
-            val path = parts.getOrNull(1)?.substringBefore('?') ?: "/"
+            val target = parts.getOrNull(1) ?: "/"
+            val path = target.substringBefore('?')
+            val query = target.substringAfter('?', "")
             val out = socket.getOutputStream()
+            if (path != "/favicon.ico") {
+                val agent = userAgent.take(40).ifEmpty { "?" }
+                onLog("$method $path ← ${socket.inetAddress.hostAddress} ($agent)")
+            }
 
             when {
                 method == "OPTIONS" -> {
@@ -110,8 +131,10 @@ class StreamServer(
                     closeQuietly(socket)
                 }
                 path.startsWith("/stream") -> {
-                    val format = if (path.endsWith(".wav")) StreamFormat.WAV else StreamFormat.AAC
-                    writeHeaders(out, "200 OK", format.mimeType, dlna = true)
+                    val format = StreamFormat.fromPath(path)
+                    // Le lecteur DLNA peut attendre exactement le type qu'il a annoncé (ex. audio/x-wav).
+                    val mimeType = mimeOverride(query) ?: format.mimeType
+                    writeHeaders(out, "200 OK", mimeType, dlna = true)
                     if (method == "HEAD") return closeQuietly(socket)
                     if (format == StreamFormat.WAV) {
                         out.write(wavHeader())
@@ -140,7 +163,7 @@ class StreamServer(
         val client = Client(socket, format)
         clients.add(client)
         onClientsChanged(clients.size)
-        Log.i(TAG, "Client connecté : ${socket.inetAddress.hostAddress}")
+        val startMs = System.currentTimeMillis()
         try {
             while (running) {
                 val frame = client.queue.poll(1, TimeUnit.SECONDS) ?: continue
@@ -159,7 +182,8 @@ class StreamServer(
             clients.remove(client)
             closeQuietly(socket)
             onClientsChanged(clients.size)
-            Log.i(TAG, "Client déconnecté : ${socket.inetAddress.hostAddress}")
+            val seconds = (System.currentTimeMillis() - startMs) / 1000
+            onLog("Fin du flux ${format.name} → ${socket.inetAddress.hostAddress} après $seconds s")
         }
     }
 
@@ -188,6 +212,15 @@ class StreamServer(
         sb.append("\r\n")
         out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
         out.flush()
+    }
+
+    private fun mimeOverride(query: String): String? {
+        val value = query.split('&')
+            .firstOrNull { it.startsWith("mime=") }
+            ?.substringAfter('=')
+            ?.let { URLDecoder.decode(it, "UTF-8") }
+            ?: return null
+        return value.takeIf { MIME_PATTERN.matches(it) }
     }
 
     private fun closeQuietly(socket: Socket) {
@@ -222,7 +255,10 @@ class StreamServer(
     companion object {
         private const val TAG = "StreamServer"
         const val DLNA_FEATURES = "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
-        private const val QUEUE_SIZE = 256 // ≈ 5 s d'audio à 48 kHz
+        // ≈ 2 s d'audio : au-delà, l'enceinte a pris du retard et on jette le plus ancien
+        // pour que le décalage ne s'accumule pas.
+        private const val QUEUE_SIZE = 100
+        private val MIME_PATTERN = Regex("audio/[A-Za-z0-9.+-]+(;[A-Za-z0-9=.;-]+)?")
 
         private const val INDEX_HTML = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">

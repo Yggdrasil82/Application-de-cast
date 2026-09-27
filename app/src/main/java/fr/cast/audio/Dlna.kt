@@ -13,6 +13,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.net.URLEncoder
 
 /** Lecteur DLNA/UPnP (MediaRenderer) découvert sur le réseau : Sonos, Freebox, TV, amplis… */
 data class DlnaRenderer(
@@ -24,6 +25,9 @@ data class DlnaRenderer(
     val connectionManagerType: String?,
 )
 
+/** Manière de servir le flux à un lecteur : format produit et type MIME annoncé au lecteur. */
+data class DlnaOffer(val format: StreamFormat, val mimeType: String)
+
 /**
  * Client DLNA minimal : découverte SSDP et pilotage AVTransport par SOAP.
  * Toutes les méthodes sont bloquantes : à appeler hors du thread principal.
@@ -33,6 +37,11 @@ object Dlna {
     private const val SSDP_ADDRESS = "239.255.255.250"
     private const val SSDP_PORT = 1900
     private const val HTTP_TIMEOUT_MS = 4000
+    private const val PLAY_CHECK_SECONDS = 12
+
+    private val WAV_MIMES = setOf("audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave")
+    private val AAC_MIMES = setOf("audio/aac", "audio/x-aac", "audio/aacp", "audio/vnd.dlna.adts")
+    private val AUDIO_HINTS = listOf("l16", "wav", "wave", "aac", "adts")
 
     private val SEARCH_TARGETS = listOf(
         "urn:schemas-upnp-org:device:MediaRenderer:1",
@@ -168,58 +177,149 @@ object Dlna {
     // --- Lecture -------------------------------------------------------------------------------
 
     /**
-     * Demande au lecteur de lire le flux du téléphone. Choisit WAV ou AAC selon ce que l'appareil
-     * annonce savoir lire, et renvoie le format retenu.
+     * Façons de servir le flux à ce lecteur, de la plus probable à la moins probable :
+     * d'abord les formats qu'il annonce (GetProtocolInfo), avec le type MIME exact qu'il attend,
+     * puis les autres en dernier recours.
      */
-    fun play(renderer: DlnaRenderer, baseUrl: String, title: String): StreamFormat {
-        val format = chooseFormat(renderer)
-        val url = baseUrl + format.path
-        try {
-            stop(renderer) // certains lecteurs refusent un nouveau flux pendant une lecture
-        } catch (_: IOException) {
+    fun offers(renderer: DlnaRenderer, log: (String) -> Unit = {}): List<DlnaOffer> {
+        val mimes = sinkMimeTypes(renderer)
+        if (mimes.isEmpty()) {
+            log("${renderer.name} n'indique pas les formats qu'il accepte")
+        } else {
+            val interesting = mimes.filter { m -> AUDIO_HINTS.any { it in m.lowercase() } }.distinct()
+            log("${renderer.name} accepte : ${interesting.joinToString(", ").ifEmpty { "aucun format utilisable" }}")
         }
-        soap(
-            renderer.avTransportUrl, renderer.avTransportType, "SetAVTransportURI",
-            "InstanceID" to "0",
-            "CurrentURI" to url,
-            "CurrentURIMetaData" to didl(url, format, title),
-        )
-        soap(renderer.avTransportUrl, renderer.avTransportType, "Play", "InstanceID" to "0", "Speed" to "1")
-        return format
+        val lower = mimes.map { it.lowercase() }
+        val offers = mutableListOf<DlnaOffer>()
+        if (lower.any { it.startsWith("audio/l16") && ("rate=" !in it || "rate=48000" in it) }) {
+            offers += DlnaOffer(StreamFormat.L16, StreamFormat.L16.mimeType)
+        }
+        mimes.firstOrNull { it.lowercase() in WAV_MIMES }?.let { offers += DlnaOffer(StreamFormat.WAV, it) }
+        mimes.firstOrNull { it.lowercase() in AAC_MIMES }?.let { offers += DlnaOffer(StreamFormat.AAC, it) }
+        for (format in listOf(StreamFormat.WAV, StreamFormat.AAC, StreamFormat.L16)) {
+            if (offers.none { it.format == format }) offers += DlnaOffer(format, format.mimeType)
+        }
+        return offers
+    }
+
+    /**
+     * Essaie les [offers] une par une jusqu'à ce que le lecteur lise vraiment le flux :
+     * il doit être en état PLAYING ET être connecté au serveur du téléphone ([isStreaming]).
+     * Renvoie l'offre retenue, ou null si aucune ne marche.
+     */
+    fun play(
+        renderer: DlnaRenderer,
+        baseUrl: String,
+        title: String,
+        offers: List<DlnaOffer>,
+        isStreaming: (StreamFormat) -> Boolean,
+        log: (String) -> Unit,
+    ): DlnaOffer? {
+        for (offer in offers) {
+            val url = baseUrl + offer.format.path + "?mime=" + URLEncoder.encode(offer.mimeType, "UTF-8")
+            log("Essai en ${offer.format.name} (${offer.mimeType})")
+            try {
+                try {
+                    stop(renderer) // certains lecteurs refusent un nouveau flux pendant une lecture
+                } catch (_: IOException) {
+                }
+                soap(
+                    renderer.avTransportUrl, renderer.avTransportType, "SetAVTransportURI",
+                    "InstanceID" to "0",
+                    "CurrentURI" to url,
+                    "CurrentURIMetaData" to didl(url, offer, title),
+                )
+                playWithRetry(renderer)
+            } catch (e: IOException) {
+                log("Refusé : ${e.message}")
+                continue
+            }
+            if (waitUntilPlaying(renderer, offer.format, isStreaming, log)) {
+                log("${renderer.name} lit le flux en ${offer.format.name}")
+                return offer
+            }
+            log("Pas de lecture en ${offer.format.name}, format suivant…")
+        }
+        return null
     }
 
     fun stop(renderer: DlnaRenderer) {
         soap(renderer.avTransportUrl, renderer.avTransportType, "Stop", "InstanceID" to "0")
     }
 
-    private fun chooseFormat(renderer: DlnaRenderer): StreamFormat {
-        val sink = try {
-            if (renderer.connectionManagerUrl != null && renderer.connectionManagerType != null) {
-                val response = soap(renderer.connectionManagerUrl, renderer.connectionManagerType, "GetProtocolInfo")
-                Regex("<Sink>(.*?)</Sink>", RegexOption.DOT_MATCHES_ALL).find(response)?.groupValues?.get(1)
-            } else {
-                null
+    /** Juste après SetAVTransportURI, certains lecteurs sont encore en transition (erreur 701). */
+    private fun playWithRetry(renderer: DlnaRenderer) {
+        var attempt = 0
+        while (true) {
+            try {
+                soap(renderer.avTransportUrl, renderer.avTransportType, "Play", "InstanceID" to "0", "Speed" to "1")
+                return
+            } catch (e: IOException) {
+                if (++attempt >= 3) throw e
+                Thread.sleep(700)
             }
-        } catch (e: IOException) {
-            Log.w(TAG, "GetProtocolInfo a échoué", e)
-            null
-        }?.lowercase().orEmpty()
-
-        return when {
-            listOf("audio/wav", "audio/x-wav", "audio/wave").any { it in sink } -> StreamFormat.WAV
-            listOf("audio/aac", "audio/x-aac", "adts", "audio/mp4").any { it in sink } -> StreamFormat.AAC
-            else -> StreamFormat.WAV // LPCM est le seul format audio obligatoire en DLNA
         }
     }
 
-    private fun didl(url: String, format: StreamFormat, title: String): String {
-        val protocolInfo = "http-get:*:${format.mimeType}:${StreamServer.DLNA_FEATURES}"
+    private fun waitUntilPlaying(
+        renderer: DlnaRenderer,
+        format: StreamFormat,
+        isStreaming: (StreamFormat) -> Boolean,
+        log: (String) -> Unit,
+    ): Boolean {
+        var lastState: String? = null
+        var good = 0
+        for (second in 1..PLAY_CHECK_SECONDS) {
+            Thread.sleep(1000)
+            val state = try {
+                transportState(renderer)
+            } catch (_: IOException) {
+                null
+            }
+            val streaming = isStreaming(format)
+            if (state != null && state != lastState) {
+                log("État du lecteur : $state")
+                lastState = state
+            }
+            // Sans réponse à GetTransportInfo, on se contente de la connexion au flux.
+            good = if (streaming && (state == null || state == "PLAYING")) good + 1 else 0
+            if (good >= 3) return true
+            if (second >= 5 && !streaming && state in listOf("STOPPED", "NO_MEDIA_PRESENT")) return false
+        }
+        return false
+    }
+
+    private fun transportState(renderer: DlnaRenderer): String? {
+        val response = soap(renderer.avTransportUrl, renderer.avTransportType, "GetTransportInfo", "InstanceID" to "0")
+        return Regex("<CurrentTransportState>(.*?)</CurrentTransportState>").find(response)?.groupValues?.get(1)
+    }
+
+    /** Types MIME annoncés par le lecteur (3e champ de chaque protocolInfo « http-get:*:mime:… »). */
+    private fun sinkMimeTypes(renderer: DlnaRenderer): List<String> {
+        val cmUrl = renderer.connectionManagerUrl ?: return emptyList()
+        val cmType = renderer.connectionManagerType ?: return emptyList()
+        val sink = try {
+            val response = soap(cmUrl, cmType, "GetProtocolInfo")
+            Regex("<Sink>(.*?)</Sink>", RegexOption.DOT_MATCHES_ALL).find(response)?.groupValues?.get(1)
+        } catch (e: IOException) {
+            Log.w(TAG, "GetProtocolInfo a échoué", e)
+            null
+        } ?: return emptyList()
+        return unescape(sink).split(',')
+            .map { it.trim().split(':') }
+            .filter { it.size >= 3 && it[0].equals("http-get", ignoreCase = true) }
+            .map { it[2] }
+    }
+
+    private fun didl(url: String, offer: DlnaOffer, title: String): String {
+        val profile = if (offer.format == StreamFormat.L16) "DLNA.ORG_PN=LPCM;" else ""
+        val protocolInfo = "http-get:*:${offer.mimeType}:$profile${StreamServer.DLNA_FEATURES}"
         return "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" " +
             "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" " +
             "xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\">" +
             "<item id=\"audiocast\" parentID=\"0\" restricted=\"1\">" +
             "<dc:title>${escape(title)}</dc:title>" +
-            "<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>" +
+            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>" +
             "<res protocolInfo=\"${escape(protocolInfo)}\">${escape(url)}</res>" +
             "</item></DIDL-Lite>"
     }
@@ -267,6 +367,13 @@ object Dlna {
             conn.disconnect()
         }
     }
+
+    private fun unescape(text: String) = text
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 
     private fun escape(text: String) = text
         .replace("&", "&amp;")

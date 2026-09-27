@@ -141,9 +141,11 @@ class AudioCaptureService : Service() {
         }
 
         val ip = NetworkUtils.localIpv4(this)
-        val streamServer = StreamServer(PORT) { count ->
-            StreamState.update { it.copy(clients = count) }
-        }
+        val streamServer = StreamServer(
+            PORT,
+            onClientsChanged = { count -> StreamState.update { it.copy(clients = count) } },
+            onLog = StreamState::log,
+        )
         try {
             streamServer.start()
         } catch (e: IOException) {
@@ -151,6 +153,7 @@ class AudioCaptureService : Service() {
             throw IllegalStateException("Port $PORT indisponible", e)
         }
         server = streamServer
+        activeServer = streamServer
 
         acquireLocks()
         capturing = true
@@ -177,6 +180,9 @@ class AudioCaptureService : Service() {
             encoder.encode(pcm, length)
             if (streamServer.hasClients(StreamFormat.WAV)) {
                 streamServer.broadcast(StreamFormat.WAV, pcm.copyOf(length))
+            }
+            if (streamServer.hasClients(StreamFormat.L16)) {
+                streamServer.broadcast(StreamFormat.L16, toBigEndian(pcm, length))
             }
         }
         val buffer = ByteArray(FRAME_BYTES)
@@ -231,6 +237,18 @@ class AudioCaptureService : Service() {
         }
     }
 
+    /** Copie d'un bloc PCM 16 bits little-endian en big-endian (LPCM « audio/L16 »). */
+    private fun toBigEndian(pcm: ByteArray, length: Int): ByteArray {
+        val out = ByteArray(length and 1.inv())
+        var i = 0
+        while (i + 1 < length) {
+            out[i] = pcm[i + 1]
+            out[i + 1] = pcm[i]
+            i += 2
+        }
+        return out
+    }
+
     /** Amplitude maximale d'un bloc PCM 16 bits little-endian. */
     private fun peakOf(pcm: ByteArray, length: Int): Int {
         var max = 0
@@ -262,6 +280,7 @@ class AudioCaptureService : Service() {
         captureThread = null
         server?.stop()
         server = null
+        activeServer = null
         projection?.unregisterCallback(projectionCallback)
         projection?.stop()
         projection = null
@@ -293,6 +312,13 @@ class AudioCaptureService : Service() {
             Intent(context, AudioCaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
+
+        /** Serveur de flux du service en cours, s'il y en a un. */
+        @Volatile
+        private var activeServer: StreamServer? = null
+
+        /** Vrai si un appareil est en train de lire le flux dans ce format. */
+        fun isStreaming(format: StreamFormat) = activeServer?.hasClients(format) == true
 
         fun stop(context: Context) {
             context.startService(Intent(context, AudioCaptureService::class.java).setAction(ACTION_STOP))

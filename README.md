@@ -21,13 +21,13 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
 1. `AudioCaptureService` capture le son joué par les autres applications via l'API
    `AudioPlaybackCaptureConfiguration` (autorisation de « capture d'écran » demandée au démarrage).
 2. `AacEncoder` encode le son en AAC-LC 48 kHz stéréo 192 kb/s (trames ADTS).
-3. `StreamServer` diffuse le flux sur `http://<ip-du-téléphone>:8765/stream.aac` (AAC)
-   et `http://<ip-du-téléphone>:8765/stream.wav` (PCM/WAV, format obligatoire des lecteurs DLNA).
+3. `StreamServer` diffuse le flux sur `http://<ip-du-téléphone>:8765/stream.aac` (AAC),
+   `/stream.wav` (PCM/WAV) et `/stream.l16` (LPCM, format obligatoire de la norme DLNA).
 4. `MainActivity` envoie cette adresse à l'enceinte choisie :
    - Google Cast : SDK Google Cast, récepteur multimédia par défaut (sans inscription à la console Cast) ;
    - DLNA/UPnP (`Dlna.kt`) : découverte SSDP des `MediaRenderer`, puis commandes SOAP
-     `SetAVTransportURI` + `Play`. Le format (WAV ou AAC) est choisi selon ce que l'appareil
-     annonce savoir lire (`GetProtocolInfo`).
+     `SetAVTransportURI` + `Play`, puis vérification (`GetTransportInfo` + connexion au flux).
+     Les formats annoncés par l'appareil (`GetProtocolInfo`) sont essayés en premier.
 
 ## Utilisation
 
@@ -48,9 +48,13 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
   parfait pour la musique, pas adapté à la vidéo avec synchronisation labiale.
 - Le téléphone continue de jouer le son localement : baissez son volume ou utilisez un casque.
   Sur certains appareils, couper complètement le volume média coupe aussi la capture.
-- DLNA : chaque fabricant interprète la norme à sa façon. Certains lecteurs refusent les flux en
-  direct de durée inconnue, ou coupent au bout d'un moment : c'est à tester appareil par appareil.
-  Le WAV consomme environ 1,5 Mb/s sur le Wi-Fi.
+- DLNA : chaque fabricant interprète la norme à sa façon. L'application essaie automatiquement
+  plusieurs formats (LPCM/L16, WAV, AAC) jusqu'à ce que le lecteur lise vraiment le flux ; un appui
+  long sur un appareil permet d'imposer un format. Le **journal** en bas de l'écran montre ce que
+  chaque appareil demande au téléphone. Le PCM (L16/WAV) consomme environ 1,5 Mb/s sur le Wi-Fi.
+- Décalage : Google Cast garde quelques secondes en mémoire tampon. Le bouton **Resynchroniser**
+  relance la lecture pour repartir du direct, et le téléphone ne garde jamais plus de ~2 s
+  d'avance pour une enceinte en retard.
 - Le son capturé n'est pas envoyé en Bluetooth par l'application : Android le fait nativement.
 
 ## Télécharger l'APK
