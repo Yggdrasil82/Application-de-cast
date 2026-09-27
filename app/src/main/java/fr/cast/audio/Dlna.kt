@@ -190,6 +190,7 @@ object Dlna {
         if (sink.isEmpty()) {
             log("${renderer.name} n'indique pas les formats qu'il accepte")
         } else {
+            log("${renderer.name} (commandes : ${renderer.avTransportUrl})")
             log("${renderer.name} accepte : ${audio.joinToString(" | ").ifEmpty { "aucun format audio" }}")
         }
         val offers = mutableListOf<DlnaOffer>()
@@ -239,12 +240,15 @@ object Dlna {
                     if (transportStateOrNull(renderer) !in listOf(null, "NO_MEDIA_PRESENT", "STOPPED")) {
                         stopQuietly(renderer) // certains lecteurs refusent un nouveau flux pendant une lecture
                     }
-                    soap(
+                    val metadata = didl(url, protocolInfo, title)
+                    log("Adresse envoyée : $url")
+                    val answer = soap(
                         renderer.avTransportUrl, renderer.avTransportType, "SetAVTransportURI",
                         "InstanceID" to "0",
                         "CurrentURI" to url,
-                        "CurrentURIMetaData" to didl(url, protocolInfo, title),
+                        "CurrentURIMetaData" to metadata,
                     )
+                    log("Réponse à SetAVTransportURI : ${compact(answer)}")
                     Thread.sleep(500)
                     retained = checkCurrentUri(renderer, log)
                     playWithRetry(renderer)
@@ -280,6 +284,7 @@ object Dlna {
             log("GetMediaInfo impossible : ${e.message}")
             return true // on ne sait pas : on laisse sa chance au lecteur
         }
+        log("Réponse à GetMediaInfo : ${compact(response)}")
         val uri = Regex("<CurrentURI>(.*?)</CurrentURI>", RegexOption.DOT_MATCHES_ALL)
             .find(response)?.groupValues?.get(1)?.let(::unescape)?.trim()
         log(if (uri.isNullOrEmpty()) "Le lecteur n'indique pas (encore) d'adresse" else "Adresse retenue : $uri")
@@ -437,6 +442,13 @@ object Dlna {
         } finally {
             conn.disconnect()
         }
+    }
+
+    /** Corps d'une réponse SOAP sans l'enveloppe, sur une ligne, pour le journal. */
+    private fun compact(xml: String): String {
+        val body = Regex("<[^>]*Body[^>]*>(.*)</[^>]*Body>", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1) ?: xml
+        return body.replace(Regex("\\s+"), " ").trim().take(300).ifEmpty { "(vide)" }
     }
 
     private fun unescape(text: String) = text
