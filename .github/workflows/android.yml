@@ -11,6 +11,11 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Les builds d'une même branche passent l'un après l'autre : deux publications de Release
+    # simultanées échouent côté GitHub.
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
