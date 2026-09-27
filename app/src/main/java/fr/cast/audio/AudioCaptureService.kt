@@ -25,6 +25,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.IntentCompat
 import java.io.IOException
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 /**
@@ -179,6 +180,7 @@ class AudioCaptureService : Service() {
         }
         // Le PCM brut alimente à la fois l'encodeur AAC et le flux WAV (format imposé par la norme DLNA).
         fun feed(pcm: ByteArray, length: Int) {
+            for (sink in pcmSinks) sink(pcm, length)
             encoder.encode(pcm, length)
             if (streamServer.hasClients(StreamFormat.WAV)) {
                 streamServer.broadcast(StreamFormat.WAV, pcm.copyOf(length))
@@ -277,6 +279,7 @@ class AudioCaptureService : Service() {
 
     override fun onDestroy() {
         val wasRunning = server != null
+        AirPlaySessions.stop()
         capturing = false
         captureThread?.interrupt()
         captureThread?.join(1000)
@@ -304,7 +307,8 @@ class AudioCaptureService : Service() {
         const val EXTRA_RESULT_DATA = "result_data"
 
         const val PORT = 8765
-        const val SAMPLE_RATE = 48_000
+        // 44,1 kHz : seule fréquence acceptée par AirPlay ; Google Cast et DLNA l'acceptent aussi.
+        const val SAMPLE_RATE = 44_100
         const val CHANNELS = 2
         const val BIT_RATE = 192_000
         private const val LEVEL_INTERVAL_NS = 250_000_000L
@@ -316,6 +320,9 @@ class AudioCaptureService : Service() {
             Intent(context, AudioCaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
+
+        /** Destinataires du PCM brut (sessions AirPlay), appelés sur le fil de capture. */
+        val pcmSinks = CopyOnWriteArrayList<(ByteArray, Int) -> Unit>()
 
         /** Serveur de flux du service en cours, s'il y en a un. */
         @Volatile

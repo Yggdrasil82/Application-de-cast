@@ -27,6 +27,8 @@
     <string name="speakers_hint">Touchez une enceinte pour y envoyer le son, touchez-la à nouveau pour l’arrêter. Appui long sur un appareil DLNA : choisir le format.</string>
     <string name="speaker_cast">Google Cast</string>
     <string name="speaker_dlna">DLNA / UPnP</string>
+    <string name="speaker_airplay">AirPlay</string>
+    <string name="airplay_playing">Lecture en cours (AirPlay)</string>
     <string name="speaker_connecting">Connexion…</string>
     <string name="speaker_connected">Connectée</string>
     <string name="cast_unavailable">Google Cast indisponible : les services Google Play sont requis.</string>

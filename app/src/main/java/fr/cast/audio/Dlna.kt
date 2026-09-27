@@ -196,7 +196,7 @@ object Dlna {
         val offers = mutableListOf<DlnaOffer>()
         audio.firstOrNull {
             val mime = mimeOf(it).lowercase()
-            mime.startsWith("audio/l16") && ("rate=" !in mime || "rate=48000" in mime)
+            mime.startsWith("audio/l16") && ("rate=" !in mime || "rate=${AudioCaptureService.SAMPLE_RATE}" in mime)
         }?.let { offers += DlnaOffer(StreamFormat.L16, StreamFormat.L16.mimeType, it) }
         audio.firstOrNull { mimeOf(it).lowercase() in WAV_MIMES }
             ?.let { offers += DlnaOffer(StreamFormat.WAV, mimeOf(it), it) }

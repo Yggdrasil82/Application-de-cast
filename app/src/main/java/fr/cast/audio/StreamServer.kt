@@ -26,7 +26,7 @@ enum class StreamFormat(val path: String, val mimeType: String) {
     WAV("/stream.wav", "audio/wav"),
 
     /** PCM 16 bits big-endian brut (LPCM) : format audio obligatoire de la norme DLNA. */
-    L16("/stream.l16", "audio/L16;rate=48000;channels=2");
+    L16("/stream.l16", "audio/L16;rate=${AudioCaptureService.SAMPLE_RATE};channels=2");
 
     companion object {
         fun fromPath(path: String) = when {

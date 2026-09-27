@@ -43,7 +43,7 @@ class MainActivity : AppCompatActivity() {
         val state: State,
         val detail: String,
     ) {
-        enum class Kind { CAST, DLNA }
+        enum class Kind { CAST, DLNA, AIRPLAY }
         enum class State { IDLE, CONNECTING, ACTIVE }
     }
 
@@ -81,6 +81,18 @@ class MainActivity : AppCompatActivity() {
     /** Lecteur DLNA (et format imposé éventuel) choisi alors que la capture n'était pas démarrée. */
     private var dlnaPending: DlnaRenderer? = null
     private var dlnaPendingOffer: DlnaOffer? = null
+
+    // --- AirPlay ---
+    private lateinit var airplayDiscovery: AirPlayDiscovery
+    private var airplayDevices: List<AirPlayDevice> = emptyList()
+
+    /** Négociations AirPlay (réseau), hors du thread principal. */
+    private val airplayExecutor = Executors.newSingleThreadExecutor()
+    private var airplayConnecting: String? = null
+    private val airplayMessages = mutableMapOf<String, String>()
+
+    /** Récepteur AirPlay choisi alors que la capture n'était pas démarrée. */
+    private var airplayPending: AirPlayDevice? = null
 
     /** Mode démonstration (builds debug) : données fictives pour les captures d'écran. */
     private var demo = false
@@ -180,6 +192,11 @@ class MainActivity : AppCompatActivity() {
             binding.advancedToggle.setIconResource(if (show) R.drawable.ic_collapse else R.drawable.ic_expand)
         }
 
+        airplayDiscovery = AirPlayDiscovery(this) { devices ->
+            airplayDevices = devices
+            renderSpeakers()
+        }
+
         demo = BuildConfig.DEBUG && intent.getBooleanExtra(EXTRA_DEMO, false)
         if (demo) startDemo()
     }
@@ -193,12 +210,14 @@ class MainActivity : AppCompatActivity() {
             manager.currentCastSession?.let { onCastConnected(it) }
         }
         if (!dlnaSearched && !demo) searchDlna()
+        if (!demo) airplayDiscovery.start()
         renderSpeakers()
     }
 
     override fun onStop() {
         castSession?.remoteMediaClient?.unregisterCallback(remoteCallback)
         mediaRouter?.removeCallback(routerCallback)
+        airplayDiscovery.stop()
         StreamState.removeListener(stateListener)
         castContext?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onStop()
@@ -206,6 +225,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         dlnaExecutor.shutdown()
+        airplayExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -236,12 +256,14 @@ class MainActivity : AppCompatActivity() {
         projectionLauncher.launch(intent)
     }
 
-    /** Arrête tout : enceintes Cast et DLNA, puis la capture. */
+    /** Arrête tout : enceintes Cast, DLNA et AirPlay, puis la capture. */
     private fun stopCasting() {
         castSession?.remoteMediaClient?.stop()
         loadedUrl = null
         stopDlna()
         dlnaPending = null
+        stopAirPlay()
+        airplayPending = null
         AudioCaptureService.stop(this)
     }
 
@@ -446,6 +468,51 @@ class MainActivity : AppCompatActivity() {
         activeDlnaOffer = null
     }
 
+    // --- AirPlay (AirMedia) --------------------------------------------------------------------
+
+    private fun onAirPlaySpeakerClicked(device: AirPlayDevice) {
+        when {
+            airplayConnecting == device.id -> return
+            activeAirPlay?.id == device.id -> {
+                stopAirPlay()
+                renderSpeakers()
+            }
+            StreamState.current.running -> playOnAirPlay(device)
+            else -> {
+                airplayPending = device
+                startCapture()
+            }
+        }
+    }
+
+    private fun playOnAirPlay(device: AirPlayDevice) {
+        airplayConnecting = device.id
+        airplayMessages[device.id] = getString(R.string.speaker_connecting)
+        renderSpeakers()
+        airplayExecutor.execute {
+            val result = runCatching { AirPlaySessions.start(device, StreamState::log) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                airplayConnecting = null
+                result.onSuccess {
+                    activeAirPlay = device
+                    airplayMessages[device.id] = getString(R.string.airplay_playing)
+                }.onFailure { e ->
+                    val reason = e.message ?: e.toString()
+                    StreamState.log("AirPlay : échec avec ${device.name} ($reason)")
+                    airplayMessages[device.id] = getString(R.string.dlna_failed, reason)
+                }
+                renderSpeakers()
+            }
+        }
+    }
+
+    private fun stopAirPlay() {
+        activeAirPlay?.let { airplayMessages.remove(it.id) }
+        activeAirPlay = null
+        AirPlaySessions.stop()
+    }
+
     // --- Resynchronisation ---------------------------------------------------------------------
 
     /** Relance la lecture sur les enceintes : elles repartent du direct, sans le retard accumulé. */
@@ -458,6 +525,7 @@ class MainActivity : AppCompatActivity() {
         val renderer = activeDlna
         val offer = activeDlnaOffer
         if (renderer != null && offer != null) playOnDlna(renderer, offer)
+        activeAirPlay?.let { playOnAirPlay(it) }
     }
 
     // --- Interface -----------------------------------------------------------------------------
@@ -508,8 +576,16 @@ class MainActivity : AppCompatActivity() {
                 dlnaPending = null
                 playOnDlna(renderer, dlnaPendingOffer)
             }
+            airplayPending?.let { device ->
+                airplayPending = null
+                playOnAirPlay(device)
+            }
         } else {
             loadedUrl = null
+            if (activeAirPlay != null) {
+                activeAirPlay?.let { airplayMessages.remove(it.id) }
+                activeAirPlay = null
+            }
             if (activeDlna != null) {
                 activeDlna?.let { dlnaMessages.remove(it.udn) }
                 activeDlna = null
@@ -550,6 +626,15 @@ class MainActivity : AppCompatActivity() {
             val detail = dlnaMessages[renderer.udn] ?: getString(R.string.speaker_dlna)
             speakers += Speaker(DLNA_PREFIX + renderer.udn, renderer.name, Speaker.Kind.DLNA, state, detail)
         }
+        for (device in airplayDevices) {
+            val state = when (device.id) {
+                airplayConnecting -> Speaker.State.CONNECTING
+                activeAirPlay?.id -> Speaker.State.ACTIVE
+                else -> Speaker.State.IDLE
+            }
+            val detail = airplayMessages[device.id] ?: getString(R.string.speaker_airplay)
+            speakers += Speaker(AIRPLAY_PREFIX + device.id, device.name, Speaker.Kind.AIRPLAY, state, detail)
+        }
         return speakers
     }
 
@@ -581,7 +666,11 @@ class MainActivity : AppCompatActivity() {
         item.speakerName.text = speaker.name
         item.speakerDetail.text = speaker.detail
         item.speakerIcon.setImageResource(
-            if (speaker.kind == Speaker.Kind.CAST) R.drawable.ic_cast else R.drawable.ic_tv
+            when (speaker.kind) {
+                Speaker.Kind.CAST -> R.drawable.ic_cast
+                Speaker.Kind.DLNA -> R.drawable.ic_tv
+                Speaker.Kind.AIRPLAY -> R.drawable.ic_airplay
+            }
         )
         item.speakerProgress.visibility = if (speaker.state == Speaker.State.CONNECTING) View.VISIBLE else View.GONE
         item.speakerPlaying.visibility = if (speaker.state == Speaker.State.ACTIVE) View.VISIBLE else View.GONE
@@ -613,6 +702,9 @@ class MainActivity : AppCompatActivity() {
                 Speaker.Kind.DLNA -> dlnaRenderers
                     .firstOrNull { DLNA_PREFIX + it.udn == speaker.id }
                     ?.let { onDlnaSpeakerClicked(it) }
+                Speaker.Kind.AIRPLAY -> airplayDevices
+                    .firstOrNull { AIRPLAY_PREFIX + it.id == speaker.id }
+                    ?.let { onAirPlaySpeakerClicked(it) }
             }
         }
         card.setOnLongClickListener {
@@ -662,18 +754,22 @@ class MainActivity : AppCompatActivity() {
     private fun demoSpeakers() = listOf(
         Speaker("demo-1", "Salon", Speaker.Kind.CAST, Speaker.State.ACTIVE, getString(R.string.cast_state_playing, "WAV")),
         Speaker("demo-2", "Cuisine", Speaker.Kind.CAST, Speaker.State.IDLE, getString(R.string.speaker_cast)),
-        Speaker("demo-3", "Freebox Player", Speaker.Kind.DLNA, Speaker.State.IDLE, getString(R.string.speaker_dlna)),
+        Speaker("demo-3", "Freebox Player", Speaker.Kind.AIRPLAY, Speaker.State.IDLE, getString(R.string.speaker_airplay)),
     )
 
     companion object {
         private const val TAG = "MainActivity"
         private const val CAST_PREFIX = "cast:"
         private const val DLNA_PREFIX = "dlna:"
+        private const val AIRPLAY_PREFIX = "airplay:"
         const val EXTRA_DEMO = "demo"
         private const val LOG_LINES_SHOWN = 40
 
         /** Lecteur DLNA en cours de lecture et format retenu (conservés si l'activité est recréée). */
         private var activeDlna: DlnaRenderer? = null
         private var activeDlnaOffer: DlnaOffer? = null
+
+        /** Récepteur AirPlay en cours de lecture (la session vit dans [AirPlaySessions]). */
+        private var activeAirPlay: AirPlayDevice? = null
     }
 }

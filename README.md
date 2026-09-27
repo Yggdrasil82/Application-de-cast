@@ -3,6 +3,7 @@
 Application Android qui diffuse **le son de votre téléphone** (musique, podcasts, jeux, vidéos…) vers :
 
 - **les enceintes Google / Chromecast en Wi-Fi** : Nest Audio, Nest Mini, Chromecast Audio, téléviseurs avec Chromecast, groupes d'enceintes Google Home ;
+- **les récepteurs AirPlay en Wi-Fi** (AirMedia chez Free) : Freebox Player, Apple TV, enceintes compatibles ;
 - **les lecteurs DLNA/UPnP en Wi-Fi** : Sonos, Freebox Player, TV connectées, amplis et enceintes réseau (Denon/HEOS, Yamaha MusicCast, Bose…) ;
 - **n'importe quel autre lecteur du réseau** (VLC, Kodi, navigateur web d'un PC ou d'une TV…) grâce à une adresse de flux HTTP.
 
@@ -13,6 +14,7 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
  (Spotify, YouTube…)     (AudioPlaybackCapture)        (MediaCodec)          │
                                                                               ├──► Enceinte Google Cast (Wi-Fi)
                                                                               ├──► Lecteur DLNA/UPnP (Wi-Fi)
+ Capture PCM 44,1 kHz ─────────────────────► ALAC + RTP (RAOP) ─────────────────► Récepteur AirPlay (Wi-Fi)
                                                                               └──► VLC / navigateur / Kodi…
 ```
 
@@ -26,6 +28,13 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
    - DLNA/UPnP (`Dlna.kt`) : découverte SSDP des `MediaRenderer`, puis commandes SOAP
      `SetAVTransportURI` + `Play`, puis vérification (`GetTransportInfo` + connexion au flux).
      Les formats annoncés par l'appareil (`GetProtocolInfo`) sont essayés en premier.
+
+### AirPlay (`AirPlay.kt`, `Raop.kt`)
+
+Découverte mDNS (`_raop._tcp`) avec le NsdManager d'Android, puis protocole AirPlay 1 (RAOP) :
+négociation RTSP (`ANNOUNCE`/`SETUP`/`RECORD`), son en ALAC non compressé dans des paquets RTP UDP
+(352 échantillons), chiffrement AES si le récepteur l'exige, synchronisation et horloge NTP sur les
+ports de contrôle et de timing, renvoi des paquets perdus. Latence d'environ 2 s.
 
 ## Utilisation
 
