@@ -23,6 +23,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
@@ -102,6 +103,7 @@ class AudioCaptureService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_cast)
+            .setColor(ContextCompat.getColor(this, R.color.green))
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
