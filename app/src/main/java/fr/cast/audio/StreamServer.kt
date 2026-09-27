@@ -222,7 +222,7 @@ class StreamServer(
     companion object {
         private const val TAG = "StreamServer"
         const val DLNA_FEATURES = "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
-        private const val QUEUE_SIZE = 64 // ≈ 1,4 s d'audio à 48 kHz
+        private const val QUEUE_SIZE = 256 // ≈ 5 s d'audio à 48 kHz
 
         private const val INDEX_HTML = """<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">

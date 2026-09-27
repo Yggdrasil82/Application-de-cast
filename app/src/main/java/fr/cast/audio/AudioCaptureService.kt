@@ -184,11 +184,21 @@ class AudioCaptureService : Service() {
         val bytesPerSecond = SAMPLE_RATE * CHANNELS * 2L
         val startNs = System.nanoTime()
         var fedBytes = 0L
+        var peak = 0
+        var lastLevelNs = startNs
         try {
             record.startRecording()
             while (capturing) {
                 val read = record.read(buffer, 0, buffer.size, AudioRecord.READ_NON_BLOCKING)
+                val now = System.nanoTime()
+                if (now - lastLevelNs > LEVEL_INTERVAL_NS) {
+                    val level = peak / 32768f
+                    StreamState.update { it.copy(level = level) }
+                    peak = 0
+                    lastLevelNs = now
+                }
                 if (read > 0) {
+                    peak = maxOf(peak, peakOf(buffer, read))
                     feed(buffer, read)
                     fedBytes += read
                     continue
@@ -221,6 +231,19 @@ class AudioCaptureService : Service() {
         }
     }
 
+    /** Amplitude maximale d'un bloc PCM 16 bits little-endian. */
+    private fun peakOf(pcm: ByteArray, length: Int): Int {
+        var max = 0
+        var i = 0
+        while (i + 1 < length) {
+            val sample = (pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)
+            val abs = if (sample < 0) -sample else sample
+            if (abs > max) max = abs
+            i += 2
+        }
+        return max
+    }
+
     @SuppressLint("WakelockTimeout")
     private fun acquireLocks() {
         wakeLock = getSystemService(PowerManager::class.java)
@@ -244,7 +267,7 @@ class AudioCaptureService : Service() {
         projection = null
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
-        StreamState.update { it.copy(running = false, baseUrl = null, clients = 0) }
+        StreamState.update { it.copy(running = false, baseUrl = null, clients = 0, level = 0f) }
         super.onDestroy()
     }
 
@@ -261,6 +284,7 @@ class AudioCaptureService : Service() {
         const val SAMPLE_RATE = 48_000
         const val CHANNELS = 2
         const val BIT_RATE = 192_000
+        private const val LEVEL_INTERVAL_NS = 250_000_000L
 
         /** 1024 échantillons stéréo 16 bits = une trame AAC. */
         private const val FRAME_BYTES = 1024 * CHANNELS * 2

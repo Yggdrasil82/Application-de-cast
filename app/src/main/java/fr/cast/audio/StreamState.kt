@@ -12,6 +12,8 @@ object StreamState {
         val baseUrl: String? = null,
         val clients: Int = 0,
         val error: String? = null,
+        /** Niveau crête du son capté (0 à 1), rafraîchi plusieurs fois par seconde. */
+        val level: Float = 0f,
     ) {
         /** Flux AAC : Google Cast, VLC, navigateurs. */
         val streamUrl: String? get() = baseUrl?.let { it + StreamFormat.AAC.path }

@@ -18,6 +18,29 @@
             android:gravity="center"
             android:textAppearance="?attr/textAppearanceTitleMedium" />
 
+        <LinearLayout
+            android:id="@+id/levelGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/levelBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100" />
+
+            <TextView
+                android:id="@+id/levelText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:textAppearance="?attr/textAppearanceBodySmall" />
+        </LinearLayout>
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/toggleButton"
             android:layout_width="match_parent"

@@ -24,10 +24,12 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import fr.cast.audio.databinding.ActivityMainBinding
 import java.util.concurrent.Executors
 
@@ -40,6 +42,29 @@ class MainActivity : AppCompatActivity() {
 
     /** URL actuellement envoyée à l'enceinte Cast, pour ne pas la recharger inutilement. */
     private var loadedUrl: String? = null
+
+    /** Format envoyé à l'enceinte Cast : WAV d'abord (officiellement pris en charge), AAC en secours. */
+    private var castFormat = StreamFormat.WAV
+
+    /** État du lecteur de l'enceinte Cast (lecture, mise en mémoire tampon, erreur…). */
+    private var castPlayerText: String? = null
+
+    private val remoteCallback = object : RemoteMediaClient.Callback() {
+        override fun onStatusUpdated() {
+            val status = castSession?.remoteMediaClient?.mediaStatus ?: return
+            when (status.playerState) {
+                MediaStatus.PLAYER_STATE_PLAYING ->
+                    castPlayerText = getString(R.string.cast_state_playing, castFormat.name)
+                MediaStatus.PLAYER_STATE_BUFFERING ->
+                    castPlayerText = getString(R.string.cast_state_buffering)
+                MediaStatus.PLAYER_STATE_IDLE ->
+                    if (status.idleReason == MediaStatus.IDLE_REASON_ERROR && loadedUrl != null) {
+                        onCastPlaybackError(getString(R.string.cast_error_player))
+                    }
+            }
+            renderCast()
+        }
+    }
 
     private val stateListener: (StreamState.Snapshot) -> Unit = { render(it) }
 
@@ -140,6 +165,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onStop() {
+        castSession?.remoteMediaClient?.unregisterCallback(remoteCallback)
         StreamState.removeListener(stateListener)
         audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         castContext?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
@@ -193,10 +219,16 @@ class MainActivity : AppCompatActivity() {
     // --- Google Cast ---------------------------------------------------------------------------
 
     private fun onCastConnected(session: CastSession, autoStart: Boolean = false) {
+        castSession?.remoteMediaClient?.unregisterCallback(remoteCallback)
         castSession = session
+        session.remoteMediaClient?.registerCallback(remoteCallback)
+        if (autoStart) {
+            castFormat = StreamFormat.WAV
+            castPlayerText = null
+        }
         val state = StreamState.current
         if (state.running) {
-            loadOnCastDevice(state.streamUrl)
+            loadOnCastDevice(state.baseUrl)
         } else if (autoStart) {
             // On vient de choisir une enceinte : on lance directement la capture.
             loadedUrl = null
@@ -206,31 +238,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onCastDisconnected() {
+        castSession?.remoteMediaClient?.unregisterCallback(remoteCallback)
         castSession = null
         loadedUrl = null
+        castFormat = StreamFormat.WAV
+        castPlayerText = null
         renderCast()
     }
 
-    private fun loadOnCastDevice(url: String?) {
+    /** L'enceinte n'arrive pas à lire le flux : on retente une fois dans l'autre format. */
+    private fun onCastPlaybackError(reason: String) {
+        Log.w(TAG, "Lecture Cast en échec ($castFormat) : $reason")
+        loadedUrl = null
+        if (castFormat == StreamFormat.WAV) {
+            castFormat = StreamFormat.AAC
+            castPlayerText = getString(R.string.cast_state_retry)
+            loadOnCastDevice(StreamState.current.baseUrl)
+        } else {
+            castPlayerText = getString(R.string.cast_state_failed, reason)
+        }
+        renderCast()
+    }
+
+    private fun loadOnCastDevice(baseUrl: String?) {
         val client = castSession?.remoteMediaClient ?: return
-        if (url == null || url == loadedUrl) return
+        if (baseUrl == null) return
+        val url = baseUrl + castFormat.path
+        if (url == loadedUrl) return
         val metadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
             putString(MediaMetadata.KEY_TITLE, getString(R.string.cast_title))
             putString(MediaMetadata.KEY_ARTIST, Build.MODEL)
         }
         val media = MediaInfo.Builder(url)
             .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
-            .setContentType("audio/aac")
+            .setContentType(castFormat.mimeType)
             .setMetadata(metadata)
             .build()
         client.load(MediaLoadRequestData.Builder().setMediaInfo(media).setAutoplay(true).build())
             .setResultCallback { result ->
-                if (!result.status.isSuccess) {
-                    loadedUrl = null
-                    Toast.makeText(this, getString(R.string.cast_load_failed, result.status.statusCode), Toast.LENGTH_LONG).show()
+                if (!result.status.isSuccess && loadedUrl == url) {
+                    onCastPlaybackError(getString(R.string.cast_load_failed, result.status.statusCode))
                 }
             }
         loadedUrl = url
+        castPlayerText = getString(R.string.cast_state_loading)
     }
 
     // --- DLNA / UPnP ----------------------------------------------------------------------------
@@ -333,7 +384,8 @@ class MainActivity : AppCompatActivity() {
         }
         binding.urlText.text = state.streamUrl ?: "—"
         binding.copyUrlButton.isEnabled = state.streamUrl != null
-        if (state.running) loadOnCastDevice(state.streamUrl) else loadedUrl = null
+        renderLevel(state)
+        if (state.running) loadOnCastDevice(state.baseUrl) else loadedUrl = null
         if (state.running) {
             dlnaPending?.let { renderer ->
                 dlnaPending = null
@@ -347,10 +399,17 @@ class MainActivity : AppCompatActivity() {
         renderCast()
     }
 
+    private fun renderLevel(state: StreamState.Snapshot) {
+        binding.levelGroup.visibility = if (state.running) View.VISIBLE else View.GONE
+        val percent = (state.level * 100).toInt().coerceIn(0, 100)
+        binding.levelBar.progress = percent
+        binding.levelText.setText(if (percent > 0) R.string.level_ok else R.string.level_silent)
+    }
+
     private fun renderCast() {
         val name = castSession?.castDevice?.friendlyName
         binding.castStatus.text = if (name != null) {
-            getString(R.string.cast_connected, name)
+            listOfNotNull(getString(R.string.cast_connected, name), castPlayerText).joinToString("\n")
         } else {
             getString(R.string.cast_hint)
         }

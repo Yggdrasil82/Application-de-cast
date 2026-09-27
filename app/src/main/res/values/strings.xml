@@ -20,7 +20,16 @@
     <string name="cast_connected">Connecté à « %1$s »</string>
     <string name="cast_unavailable">Google Cast indisponible : les services Google Play sont requis.</string>
     <string name="cast_title">Son du téléphone</string>
-    <string name="cast_load_failed">L’enceinte n’a pas pu lire le flux (code %1$d)</string>
+    <string name="cast_load_failed">chargement refusé (code %1$d)</string>
+    <string name="cast_error_player">erreur du lecteur</string>
+    <string name="cast_state_loading">Envoi du flux à l’enceinte…</string>
+    <string name="cast_state_buffering">L’enceinte met le son en mémoire tampon…</string>
+    <string name="cast_state_playing">L’enceinte lit le flux (%1$s)</string>
+    <string name="cast_state_retry">Format refusé, nouvel essai dans un autre format…</string>
+    <string name="cast_state_failed">L’enceinte ne parvient pas à lire le flux : %1$s</string>
+
+    <string name="level_ok">Son capté ✔</string>
+    <string name="level_silent">Aucun son capté. Lancez une musique ; si elle joue déjà, cette application bloque peut-être la capture de son son.</string>
 
     <string name="bluetooth_hint">Android envoie directement le son vers l’enceinte Bluetooth appairée : aucune capture n’est nécessaire. Vous pouvez utiliser le Bluetooth et le Wi-Fi en même temps.</string>
     <string name="bluetooth_none">Aucune enceinte Bluetooth connectée</string>
