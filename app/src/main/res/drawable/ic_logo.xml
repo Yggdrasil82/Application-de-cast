@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Logo AudioCast pour l'en-tête : même dessin que l'icône, recadré sur la pastille. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="64dp"
+    android:height="64dp"
+    android:viewportWidth="66"
+    android:viewportHeight="66">
+    <group
+        android:translateX="-23"
+        android:translateY="-20">
+        <path android:pathData="M42,26h24a16,16 0 0 1 16,16v24a16,16 0 0 1 -16,16h-24a16,16 0 0 1 -16,-16v-24a16,16 0 0 1 16,-16z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endColor="#0F6B3D"
+                    android:endX="82"
+                    android:endY="82"
+                    android:startColor="#27B86B"
+                    android:startX="26"
+                    android:startY="26"
+                    android:type="linear" />
+            </aapt:attr>
+        </path>
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M37,68v6h6c0,-3.3 -2.7,-6 -6,-6zM37,60v4.5c5.2,0 9.5,4.3 9.5,9.5H51c0,-7.7 -6.3,-14 -14,-14zM37,52v4.5c9.6,0 17.5,7.9 17.5,17.5H59c0,-12.2 -9.8,-22 -22,-22z" />
+        <path
+            android:pathData="M44,40h27a4,4 0 0 1 4,4v24a4,4 0 0 1 -4,4H64"
+            android:strokeWidth="4.5"
+            android:strokeColor="#FFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:fillColor="#E54848"
+            android:pathData="M73,30a7,7 0 1,0 14,0a7,7 0 1,0 -14,0z"
+            android:strokeWidth="3"
+            android:strokeColor="#FFFFFF" />
+    </group>
+</vector>

@@ -3,7 +3,8 @@
 Application Android qui diffuse **le son de votre téléphone** (musique, podcasts, jeux, vidéos…) vers :
 
 - **les enceintes Google / Chromecast en Wi-Fi** : Nest Audio, Nest Mini, Chromecast Audio, téléviseurs avec Chromecast, groupes d'enceintes Google Home ;
-- **les enceintes Bluetooth** : grâce au routage audio natif d'Android, avec un sélecteur de sortie intégré ;
+- **les récepteurs AirPlay en Wi-Fi** (AirMedia chez Free) : Freebox Player, Apple TV, enceintes compatibles ;
+- **les lecteurs DLNA/UPnP en Wi-Fi** : Sonos, Freebox Player, TV connectées, amplis et enceintes réseau (Denon/HEOS, Yamaha MusicCast, Bose…) ;
 - **n'importe quel autre lecteur du réseau** (VLC, Kodi, navigateur web d'un PC ou d'une TV…) grâce à une adresse de flux HTTP.
 
 ## Fonctionnement
@@ -12,25 +13,50 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
  Applis du téléphone ──► Capture audio Android 10+ ──► Encodage AAC ──► Serveur HTTP local (port 8765)
  (Spotify, YouTube…)     (AudioPlaybackCapture)        (MediaCodec)          │
                                                                               ├──► Enceinte Google Cast (Wi-Fi)
+                                                                              ├──► Lecteur DLNA/UPnP (Wi-Fi)
+ Capture PCM 44,1 kHz ─────────────────────► ALAC + RTP (RAOP) ─────────────────► Récepteur AirPlay (Wi-Fi)
                                                                               └──► VLC / navigateur / Kodi…
- Bluetooth : Android envoie le son directement à l'enceinte appairée.
 ```
 
 1. `AudioCaptureService` capture le son joué par les autres applications via l'API
    `AudioPlaybackCaptureConfiguration` (autorisation de « capture d'écran » demandée au démarrage).
 2. `AacEncoder` encode le son en AAC-LC 48 kHz stéréo 192 kb/s (trames ADTS).
-3. `StreamServer` diffuse le flux sur `http://<ip-du-téléphone>:8765/stream.aac`.
-4. `MainActivity` envoie cette adresse à l'enceinte choisie grâce au SDK Google Cast
-   (récepteur multimédia par défaut, sans inscription à la console Cast).
+3. `StreamServer` diffuse le flux sur `http://<ip-du-téléphone>:8765/stream.aac` (AAC),
+   `/stream.wav` (PCM/WAV) et `/stream.l16` (LPCM, format obligatoire de la norme DLNA).
+4. `MainActivity` envoie cette adresse à l'enceinte choisie :
+   - Google Cast : SDK Google Cast, récepteur multimédia par défaut (sans inscription à la console Cast) ;
+   - DLNA/UPnP (`Dlna.kt`) : découverte SSDP des `MediaRenderer`, puis commandes SOAP
+     `SetAVTransportURI` + `Play`, puis vérification (`GetTransportInfo` + connexion au flux).
+     Les formats annoncés par l'appareil (`GetProtocolInfo`) sont essayés en premier.
+
+### AirPlay (`AirPlay.kt`, `Raop.kt`)
+
+Découverte mDNS (`_raop._tcp`) avec le NsdManager d'Android, puis protocole AirPlay 1 (RAOP) :
+négociation RTSP (`ANNOUNCE`/`SETUP`/`RECORD`), son en ALAC non compressé dans des paquets RTP UDP
+(352 échantillons), chiffrement AES si le récepteur l'exige, synchronisation et horloge NTP sur les
+ports de contrôle et de timing, renvoi des paquets perdus. Latence d'environ 2 s.
 
 ## Utilisation
 
-1. Téléphone et enceinte sur le **même réseau Wi-Fi**.
-2. Ouvrez AudioCast et touchez l'**icône Cast** pour choisir une enceinte (ou un groupe). La capture démarre toute seule.
-   Vous pouvez aussi toucher « Démarrer la diffusion » puis choisir l'enceinte.
-3. Acceptez la demande de capture, puis lancez votre musique dans n'importe quelle application.
-4. Pour le Bluetooth : appairez l'enceinte dans les réglages Android, ou touchez « Choisir la sortie audio ».
-5. Pour un autre appareil : ouvrez l'adresse affichée dans VLC (« Ouvrir un flux réseau ») ou dans un navigateur.
+| À l'arrêt | Diffusion en cours | Thème sombre |
+|---|---|---|
+| ![À l'arrêt](docs/captures/arret.png) | ![Diffusion](docs/captures/diffusion.png) | ![Thème sombre](docs/captures/diffusion-sombre.png) |
+
+1. Téléphone et enceintes sur le **même réseau Wi-Fi**.
+2. Ouvrez AudioCast : les enceintes Google Cast et DLNA apparaissent dans une seule liste
+   (bouton ⟳ pour relancer la recherche).
+3. Touchez une enceinte : la capture démarre, acceptez la demande d'Android puis lancez votre musique.
+   Touchez à nouveau l'enceinte pour l'arrêter ; le gros bouton arrête tout.
+4. Appui long sur un appareil DLNA pour choisir soi-même le format.
+   Un appareil qui propose aussi l'AirPlay (ex. Freebox Player) n'apparaît qu'une fois, en AirPlay.
+   Le curseur sous l'enceinte active règle son volume (AirPlay, Google Cast) ; « Reprendre sur … »
+   relance la dernière enceinte utilisée ; le mot de passe AirMedia est demandé une fois puis retenu.
+   « Couper le son du téléphone » coupe le haut-parleur du téléphone pendant la diffusion
+   (sur certains téléphones cela coupe aussi la capture : désactivez-le si « Aucun son capté »).
+5. Section **Avancé** : adresse du flux pour VLC / navigateur, et journal de diagnostic.
+
+Pour une enceinte Bluetooth, il suffit de l'appairer dans les réglages Android : le téléphone y envoie
+le son directement, sans passer par AudioCast.
 
 ## Limites à connaître
 
@@ -41,12 +67,25 @@ Application Android qui diffuse **le son de votre téléphone** (musique, podcas
   parfait pour la musique, pas adapté à la vidéo avec synchronisation labiale.
 - Le téléphone continue de jouer le son localement : baissez son volume ou utilisez un casque.
   Sur certains appareils, couper complètement le volume média coupe aussi la capture.
-- Le son capturé n'est pas envoyé en Bluetooth par l'application : Android le fait nativement.
+- DLNA : chaque fabricant interprète la norme à sa façon. L'application essaie automatiquement
+  plusieurs formats (LPCM/L16, WAV, AAC) jusqu'à ce que le lecteur lise vraiment le flux ; un appui
+  long sur un appareil permet d'imposer un format. Le **journal** en bas de l'écran montre ce que
+  chaque appareil demande au téléphone. Le PCM (L16/WAV) consomme environ 1,5 Mb/s sur le Wi-Fi.
+- Décalage : Google Cast garde quelques secondes en mémoire tampon. Le bouton **Resynchroniser**
+  relance la lecture pour repartir du direct, et le téléphone ne garde jamais plus de ~2 s
+  d'avance pour une enceinte en retard.
+
+## Télécharger l'APK
+
+**Dernière version :** https://github.com/Yggdrasil82/Application-de-cast/releases/latest
+(fichier `AudioCast-<version>.apk`, par exemple `AudioCast-1.0.7.apk`)
+
+Chaque push compile l'APK avec GitHub Actions et le publie dans une
+[Release](https://github.com/Yggdrasil82/Application-de-cast/releases). Les versions successives
+sont signées avec la même clé (`app/debug.keystore`, clé de développement) : une nouvelle version
+s'installe par-dessus l'ancienne.
 
 ## Compilation
-
-L'APK est compilé automatiquement par GitHub Actions à chaque push
-(onglet **Actions** → dernier build → artefact **AudioCast-apk**).
 
 En local, avec Android Studio ou le SDK Android installé :
 
@@ -57,6 +96,5 @@ En local, avec Android Studio ou le SDK Android installé :
 
 ## Pistes d'amélioration
 
-- Enceintes **DLNA/UPnP** (Sonos, Freebox, certaines TV) via découverte SSDP.
 - Réglage de la qualité (débit) et de la latence.
 - Envoi simultané vers plusieurs enceintes Cast individuelles (les groupes Google Home le permettent déjà).

@@ -1,7 +1,50 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.AudioCast" parent="Theme.Material3.DayNight">
-        <item name="colorPrimary">#1A73E8</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
+    <style name="Theme.AudioCast" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/green</item>
+        <item name="colorOnPrimary">@color/on_green</item>
+        <item name="colorPrimaryContainer">@color/green_container</item>
+        <item name="colorOnPrimaryContainer">@color/text</item>
+        <item name="colorSecondary">@color/green</item>
+        <item name="colorError">@color/red</item>
+        <item name="android:colorBackground">@color/screen_bg</item>
+        <item name="colorSurface">@color/card_bg</item>
+        <item name="colorOnSurface">@color/text</item>
+        <item name="colorOnSurfaceVariant">@color/text_muted</item>
+        <item name="colorOutlineVariant">@color/card_stroke</item>
+        <item name="android:statusBarColor">@color/banner_top</item>
+        <item name="android:navigationBarColor">@color/screen_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">@bool/light_bars</item>
+    </style>
+
+    <!-- Boutons blancs sur la carte verte -->
+    <style name="Widget.AudioCast.HeroButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textColor">@color/on_green</item>
+        <item name="iconTint">@color/on_green</item>
+        <item name="strokeColor">#B3FFFFFF</item>
+        <item name="strokeWidth">1.5dp</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:minHeight">44dp</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:paddingStart">8dp</item>
+        <item name="android:paddingEnd">8dp</item>
+        <item name="iconPadding">6dp</item>
+        <item name="iconSize">18dp</item>
+        <item name="iconGravity">textStart</item>
+    </style>
+
+    <!-- Bouton « Diffuser » d'une enceinte -->
+    <style name="Widget.AudioCast.SpeakerButton" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:textColor">@color/green</item>
+        <item name="strokeColor">@color/green</item>
+        <item name="strokeWidth">1.5dp</item>
+        <item name="android:minHeight">40dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="android:textStyle">bold</item>
     </style>
 </resources>

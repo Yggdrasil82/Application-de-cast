@@ -5,11 +5,38 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Les builds d'une même branche passent l'un après l'autre : deux publications de Release
+    # simultanées échouent côté GitHub.
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: false
+    outputs:
+      design: ${{ steps.design.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Les captures d'écran ne sont refaites que si le design a changé (ou à la demande).
+      - name: Le design a-t-il changé ?
+        id: design
+        run: |
+          before="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$before" ] \
+             || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$before" "${{ github.sha }}" \
+             | grep -qE '^(app/src/main/res/|app/src/main/java/fr/cast/audio/MainActivity\.kt|ci/screenshots\.sh)'; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-java@v4
         with:
@@ -21,10 +48,13 @@ jobs:
       - name: Compiler l'APK
         run: ./gradlew --no-daemon assembleDebug lintDebug
 
+      - name: Renommer l'APK avec sa version
+        run: cp app/build/outputs/apk/debug/app-debug.apk "AudioCast-1.0.${{ github.run_number }}.apk"
+
       - uses: actions/upload-artifact@v4
         with:
           name: AudioCast-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: AudioCast-*.apk
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -32,3 +62,83 @@ jobs:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
           if-no-files-found: ignore
+
+      # Chaque push publie une Release avec AudioCast-<version>.apk ; la dernière est toujours sur
+      # https://github.com/<propriétaire>/<dépôt>/releases/latest
+      - name: Publier la Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: AudioCast 1.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: AudioCast-1.0.${{ github.run_number }}.apk
+          body: |
+            APK de la branche `${{ github.ref_name }}` (commit ${{ github.sha }}).
+
+            **Installation** : téléchargez `AudioCast-1.0.${{ github.run_number }}.apk` sur le téléphone (Android 10 ou plus),
+            ouvrez-le et autorisez l'installation d'applications inconnues si Android le demande.
+
+  # Captures d'écran dans un émulateur, ajoutées au dépôt (docs/captures) pour le README.
+  screenshots:
+    needs: build
+    if: github.event_name != 'pull_request' && needs.build.outputs.design == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Seul le build le plus récent d'une branche prend des captures.
+    concurrency:
+      group: screenshots-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: AudioCast-apk
+
+      - name: Activer KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Captures dans l'émulateur
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: bash ci/screenshots.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: captures
+          path: docs/captures
+
+      - name: Ajouter les captures au dépôt
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Les captures sont posées sur la dernière version de la branche (pas de conflit
+          # si d'autres commits sont arrivés entre-temps).
+          cp -r docs/captures /tmp/captures
+          for i in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            git checkout -f -B captures FETCH_HEAD
+            rm -rf docs/captures && mkdir -p docs && cp -r /tmp/captures docs/captures
+            git add docs/captures
+            if git diff --cached --quiet; then
+              echo "Captures inchangées"
+              exit 0
+            fi
+            git commit -m "Captures d'écran de l'application [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          exit 1

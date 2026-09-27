@@ -23,8 +23,10 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import java.io.IOException
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 /**
@@ -44,7 +46,7 @@ class AudioCaptureService : Service() {
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
-            Log.i(TAG, "MediaProjection arrêtée par le système")
+            StreamState.log("Capture arrêtée par Android")
             stopSelf()
         }
     }
@@ -72,6 +74,7 @@ class AudioCaptureService : Service() {
             start(resultCode, data)
         } catch (e: Exception) {
             Log.e(TAG, "Impossible de démarrer la capture", e)
+            StreamState.log("Échec du démarrage : ${e.message ?: e}")
             StreamState.update { it.copy(running = false, error = e.message ?: e.toString()) }
             stopSelf()
         }
@@ -100,6 +103,7 @@ class AudioCaptureService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_cast)
+            .setColor(ContextCompat.getColor(this, R.color.green))
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
@@ -141,9 +145,11 @@ class AudioCaptureService : Service() {
         }
 
         val ip = NetworkUtils.localIpv4(this)
-        val streamServer = StreamServer(PORT) { count ->
-            StreamState.update { it.copy(clients = count) }
-        }
+        val streamServer = StreamServer(
+            PORT,
+            onClientsChanged = { count -> StreamState.update { it.copy(clients = count) } },
+            onLog = StreamState::log,
+        )
         try {
             streamServer.start()
         } catch (e: IOException) {
@@ -151,6 +157,7 @@ class AudioCaptureService : Service() {
             throw IllegalStateException("Port $PORT indisponible", e)
         }
         server = streamServer
+        activeServer = streamServer
 
         acquireLocks()
         capturing = true
@@ -158,8 +165,11 @@ class AudioCaptureService : Service() {
             captureLoop(record, streamServer)
         }
 
-        val url = ip?.let { "http://$it:$PORT/stream.aac" }
-        StreamState.update { it.copy(running = true, streamUrl = url, error = null) }
+        val baseUrl = ip?.let { "http://$it:$PORT" }
+        StreamState.update { it.copy(running = true, baseUrl = baseUrl, error = null) }
+        val url = StreamState.current.streamUrl
+        StreamState.log("Diffusion démarrée : ${baseUrl ?: "aucune adresse Wi-Fi détectée"}")
+        if (Prefs(this).muteLocal) LocalMute.apply(this, mute = true)
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
             buildNotification(url?.let { getString(R.string.notification_running, it) }
@@ -168,18 +178,41 @@ class AudioCaptureService : Service() {
     }
 
     private fun captureLoop(record: AudioRecord, streamServer: StreamServer) {
-        val encoder = AacEncoder(SAMPLE_RATE, CHANNELS, BIT_RATE) { frame -> streamServer.broadcast(frame) }
+        val encoder = AacEncoder(SAMPLE_RATE, CHANNELS, BIT_RATE) { frame ->
+            streamServer.broadcast(StreamFormat.AAC, frame)
+        }
+        // Le PCM brut alimente à la fois l'encodeur AAC et le flux WAV (format imposé par la norme DLNA).
+        fun feed(pcm: ByteArray, length: Int) {
+            for (sink in pcmSinks) sink(pcm, length)
+            encoder.encode(pcm, length)
+            if (streamServer.hasClients(StreamFormat.WAV)) {
+                streamServer.broadcast(StreamFormat.WAV, pcm.copyOf(length))
+            }
+            if (streamServer.hasClients(StreamFormat.L16)) {
+                streamServer.broadcast(StreamFormat.L16, toBigEndian(pcm, length))
+            }
+        }
         val buffer = ByteArray(FRAME_BYTES)
         val silence = ByteArray(FRAME_BYTES)
         val bytesPerSecond = SAMPLE_RATE * CHANNELS * 2L
         val startNs = System.nanoTime()
         var fedBytes = 0L
+        var peak = 0
+        var lastLevelNs = startNs
         try {
             record.startRecording()
             while (capturing) {
                 val read = record.read(buffer, 0, buffer.size, AudioRecord.READ_NON_BLOCKING)
+                val now = System.nanoTime()
+                if (now - lastLevelNs > LEVEL_INTERVAL_NS) {
+                    val level = peak / 32768f
+                    StreamState.update { it.copy(level = level) }
+                    peak = 0
+                    lastLevelNs = now
+                }
                 if (read > 0) {
-                    encoder.encode(buffer, read)
+                    peak = maxOf(peak, peakOf(buffer, read))
+                    feed(buffer, read)
                     fedBytes += read
                     continue
                 }
@@ -191,7 +224,7 @@ class AudioCaptureService : Service() {
                 // on injecte du silence pour que le flux reste continu (sinon l'enceinte coupe).
                 val expected = (System.nanoTime() - startNs) * bytesPerSecond / 1_000_000_000L
                 if (expected - fedBytes > bytesPerSecond / 5) {
-                    encoder.encode(silence, silence.size)
+                    feed(silence, silence.size)
                     fedBytes += silence.size
                 } else {
                     Thread.sleep(5)
@@ -211,6 +244,31 @@ class AudioCaptureService : Service() {
         }
     }
 
+    /** Copie d'un bloc PCM 16 bits little-endian en big-endian (LPCM « audio/L16 »). */
+    private fun toBigEndian(pcm: ByteArray, length: Int): ByteArray {
+        val out = ByteArray(length and 1.inv())
+        var i = 0
+        while (i + 1 < length) {
+            out[i] = pcm[i + 1]
+            out[i + 1] = pcm[i]
+            i += 2
+        }
+        return out
+    }
+
+    /** Amplitude maximale d'un bloc PCM 16 bits little-endian. */
+    private fun peakOf(pcm: ByteArray, length: Int): Int {
+        var max = 0
+        var i = 0
+        while (i + 1 < length) {
+            val sample = (pcm[i + 1].toInt() shl 8) or (pcm[i].toInt() and 0xFF)
+            val abs = if (sample < 0) -sample else sample
+            if (abs > max) max = abs
+            i += 2
+        }
+        return max
+    }
+
     @SuppressLint("WakelockTimeout")
     private fun acquireLocks() {
         wakeLock = getSystemService(PowerManager::class.java)
@@ -223,18 +281,23 @@ class AudioCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        val wasRunning = server != null
+        AirPlaySessions.stop()
+        LocalMute.apply(this, mute = false)
         capturing = false
         captureThread?.interrupt()
         captureThread?.join(1000)
         captureThread = null
         server?.stop()
         server = null
+        activeServer = null
         projection?.unregisterCallback(projectionCallback)
         projection?.stop()
         projection = null
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
-        StreamState.update { it.copy(running = false, streamUrl = null, clients = 0) }
+        if (wasRunning) StreamState.log("Diffusion arrêtée")
+        StreamState.update { it.copy(running = false, baseUrl = null, clients = 0, level = 0f) }
         super.onDestroy()
     }
 
@@ -248,9 +311,11 @@ class AudioCaptureService : Service() {
         const val EXTRA_RESULT_DATA = "result_data"
 
         const val PORT = 8765
-        const val SAMPLE_RATE = 48_000
+        // 44,1 kHz : seule fréquence acceptée par AirPlay ; Google Cast et DLNA l'acceptent aussi.
+        const val SAMPLE_RATE = 44_100
         const val CHANNELS = 2
         const val BIT_RATE = 192_000
+        private const val LEVEL_INTERVAL_NS = 250_000_000L
 
         /** 1024 échantillons stéréo 16 bits = une trame AAC. */
         private const val FRAME_BYTES = 1024 * CHANNELS * 2
@@ -259,6 +324,16 @@ class AudioCaptureService : Service() {
             Intent(context, AudioCaptureService::class.java)
                 .putExtra(EXTRA_RESULT_CODE, resultCode)
                 .putExtra(EXTRA_RESULT_DATA, data)
+
+        /** Destinataires du PCM brut (sessions AirPlay), appelés sur le fil de capture. */
+        val pcmSinks = CopyOnWriteArrayList<(ByteArray, Int) -> Unit>()
+
+        /** Serveur de flux du service en cours, s'il y en a un. */
+        @Volatile
+        private var activeServer: StreamServer? = null
+
+        /** Vrai si un appareil est en train de lire le flux dans ce format. */
+        fun isStreaming(format: StreamFormat) = activeServer?.hasClients(format) == true
 
         fun stop(context: Context) {
             context.startService(Intent(context, AudioCaptureService::class.java).setAction(ACTION_STOP))
