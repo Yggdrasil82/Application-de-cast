@@ -102,7 +102,6 @@
                 android:layout_marginStart="8dp"
                 android:layout_weight="1"
                 android:contentDescription="@string/volume"
-                android:stepSize="1"
                 android:valueFrom="0"
                 android:valueTo="100" />
         </LinearLayout>
