@@ -56,6 +56,9 @@
     <string name="copy_url">Copier</string>
     <string name="url_copied">Adresse copiée</string>
     <string name="section_log">Journal</string>
+    <string name="log_copy">Copier le journal</string>
+    <string name="log_share">Partager le journal</string>
+    <string name="log_copied">Journal copié : vous pouvez le coller dans un message</string>
     <string name="notes">Certaines applications (Netflix, streaming protégé…) interdisent la capture de leur son. Le Wi-Fi ajoute quelques secondes de décalage : idéal pour la musique, moins pour la vidéo.</string>
 
     <!-- Autorisations et notification -->

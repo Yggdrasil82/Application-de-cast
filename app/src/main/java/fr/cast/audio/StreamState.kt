@@ -45,7 +45,7 @@ object StreamState {
         update { it.copy(log = (it.log + "$time  $message").takeLast(MAX_LOG_LINES)) }
     }
 
-    private const val MAX_LOG_LINES = 12
+    private const val MAX_LOG_LINES = 300
 
     fun addListener(listener: (Snapshot) -> Unit) {
         listeners.add(listener)

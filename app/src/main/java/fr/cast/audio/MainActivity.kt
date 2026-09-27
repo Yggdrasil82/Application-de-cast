@@ -3,6 +3,7 @@ package fr.cast.audio
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.media.projection.MediaProjectionConfig
@@ -171,6 +172,8 @@ class MainActivity : AppCompatActivity() {
         binding.resyncButton.setOnClickListener { resync() }
         binding.refreshButton.setOnClickListener { searchDlna() }
         binding.copyUrlButton.setOnClickListener { copyUrl() }
+        binding.copyLogButton.setOnClickListener { copyLog() }
+        binding.shareLogButton.setOnClickListener { shareLog() }
         binding.advancedToggle.setOnClickListener {
             val show = binding.advancedGroup.visibility != View.VISIBLE
             binding.advancedGroup.visibility = if (show) View.VISIBLE else View.GONE
@@ -495,7 +498,8 @@ class MainActivity : AppCompatActivity() {
 
         binding.urlText.text = state.streamUrl ?: "—"
         binding.copyUrlButton.isEnabled = state.streamUrl != null
-        binding.logText.text = state.log.joinToString("\n").ifEmpty { "—" }
+        // À l'écran, seulement la fin du journal ; les boutons copier / partager donnent tout.
+        binding.logText.text = state.log.takeLast(LOG_LINES_SHOWN).joinToString("\n").ifEmpty { "—" }
 
         if (demo) return
         if (running) {
@@ -624,6 +628,27 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, R.string.url_copied, Toast.LENGTH_SHORT).show()
     }
 
+    /** Journal complet, précédé de quelques informations utiles au diagnostic. */
+    private fun fullLog(): String {
+        val header = "AudioCast ${BuildConfig.VERSION_NAME} · Android ${Build.VERSION.RELEASE} · " +
+            "${Build.MANUFACTURER} ${Build.MODEL}"
+        return (listOf(header) + StreamState.current.log).joinToString("\n")
+    }
+
+    private fun copyLog() {
+        getSystemService(ClipboardManager::class.java)
+            .setPrimaryClip(ClipData.newPlainText(getString(R.string.section_log), fullLog()))
+        Toast.makeText(this, R.string.log_copied, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun shareLog() {
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_SUBJECT, "Journal AudioCast")
+            .putExtra(Intent.EXTRA_TEXT, fullLog())
+        startActivity(Intent.createChooser(send, getString(R.string.log_share)))
+    }
+
     // --- Démonstration (captures d'écran) ------------------------------------------------------
 
     private fun startDemo() {
@@ -645,6 +670,7 @@ class MainActivity : AppCompatActivity() {
         private const val CAST_PREFIX = "cast:"
         private const val DLNA_PREFIX = "dlna:"
         const val EXTRA_DEMO = "demo"
+        private const val LOG_LINES_SHOWN = 40
 
         /** Lecteur DLNA en cours de lecture et format retenu (conservés si l'activité est recréée). */
         private var activeDlna: DlnaRenderer? = null
