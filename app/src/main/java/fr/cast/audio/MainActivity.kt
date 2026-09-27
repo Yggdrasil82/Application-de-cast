@@ -20,6 +20,7 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.google.android.material.button.MaterialButton
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
@@ -28,6 +29,7 @@ import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManagerListener
 import fr.cast.audio.databinding.ActivityMainBinding
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -41,11 +43,19 @@ class MainActivity : AppCompatActivity() {
 
     private val stateListener: (StreamState.Snapshot) -> Unit = { render(it) }
 
+    /** Opérations réseau DLNA (découverte, commandes SOAP), exécutées hors du thread principal. */
+    private val dlnaExecutor = Executors.newSingleThreadExecutor()
+    private var dlnaRenderers: List<DlnaRenderer> = emptyList()
+
+    /** Lecteur DLNA choisi alors que la capture n'était pas encore démarrée. */
+    private var dlnaPending: DlnaRenderer? = null
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
             if (results[Manifest.permission.RECORD_AUDIO] == true || hasRecordPermission()) {
                 requestProjection()
             } else {
+                dlnaPending = null
                 Toast.makeText(this, R.string.permission_audio_denied, Toast.LENGTH_LONG).show()
             }
         }
@@ -58,6 +68,7 @@ class MainActivity : AppCompatActivity() {
                     this, AudioCaptureService.startIntent(this, result.resultCode, data)
                 )
             } else {
+                dlnaPending = null
                 Toast.makeText(this, R.string.projection_denied, Toast.LENGTH_LONG).show()
             }
         }
@@ -108,6 +119,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.copyUrlButton.setOnClickListener { copyUrl() }
+        binding.dlnaSearchButton.setOnClickListener { searchDlna() }
         binding.outputSwitcherButton.setOnClickListener { openOutputSwitcher() }
         binding.bluetoothSettingsButton.setOnClickListener {
             startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
@@ -132,6 +144,11 @@ class MainActivity : AppCompatActivity() {
         audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
         castContext?.sessionManager?.removeSessionManagerListener(sessionListener, CastSession::class.java)
         super.onStop()
+    }
+
+    override fun onDestroy() {
+        dlnaExecutor.shutdown()
+        super.onDestroy()
     }
 
     // --- Capture -------------------------------------------------------------------------------
@@ -164,6 +181,12 @@ class MainActivity : AppCompatActivity() {
     private fun stopCasting() {
         castSession?.remoteMediaClient?.stop()
         loadedUrl = null
+        activeDlna?.let { renderer ->
+            dlnaExecutor.execute { runCatching { Dlna.stop(renderer) } }
+        }
+        activeDlna = null
+        dlnaPending = null
+        renderDlnaList()
         AudioCaptureService.stop(this)
     }
 
@@ -210,6 +233,73 @@ class MainActivity : AppCompatActivity() {
         loadedUrl = url
     }
 
+    // --- DLNA / UPnP ----------------------------------------------------------------------------
+
+    private fun searchDlna() {
+        binding.dlnaSearchButton.isEnabled = false
+        binding.dlnaStatus.setText(R.string.dlna_searching)
+        dlnaExecutor.execute {
+            val found = try {
+                Dlna.discover(applicationContext)
+            } catch (e: Exception) {
+                Log.w(TAG, "Recherche DLNA impossible", e)
+                emptyList()
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                binding.dlnaSearchButton.isEnabled = true
+                dlnaRenderers = found
+                binding.dlnaStatus.setText(if (found.isEmpty()) R.string.dlna_none else R.string.dlna_found)
+                renderDlnaList()
+            }
+        }
+    }
+
+    private fun renderDlnaList() {
+        binding.dlnaList.removeAllViews()
+        for (renderer in dlnaRenderers) {
+            val button = MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle)
+            val active = renderer.udn == activeDlna?.udn
+            button.text = if (active) "▶ ${renderer.name}" else renderer.name
+            button.isAllCaps = false
+            button.setOnClickListener { selectDlna(renderer) }
+            binding.dlnaList.addView(button)
+        }
+    }
+
+    private fun selectDlna(renderer: DlnaRenderer) {
+        if (StreamState.current.running) {
+            playOnDlna(renderer)
+        } else {
+            dlnaPending = renderer
+            startCapture()
+        }
+    }
+
+    private fun playOnDlna(renderer: DlnaRenderer) {
+        val baseUrl = StreamState.current.baseUrl
+        if (baseUrl == null) {
+            binding.dlnaStatus.setText(R.string.dlna_no_wifi)
+            return
+        }
+        binding.dlnaStatus.text = getString(R.string.dlna_connecting, renderer.name)
+        val title = getString(R.string.cast_title)
+        dlnaExecutor.execute {
+            val result = runCatching { Dlna.play(renderer, baseUrl, title) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                result.onSuccess { format ->
+                    activeDlna = renderer
+                    binding.dlnaStatus.text = getString(R.string.dlna_playing, renderer.name, format.name)
+                }.onFailure { e ->
+                    Log.w(TAG, "Lecture DLNA refusée", e)
+                    binding.dlnaStatus.text = getString(R.string.dlna_failed, renderer.name, e.message ?: e.toString())
+                }
+                renderDlnaList()
+            }
+        }
+    }
+
     // --- Bluetooth -----------------------------------------------------------------------------
 
     private fun openOutputSwitcher() {
@@ -244,6 +334,16 @@ class MainActivity : AppCompatActivity() {
         binding.urlText.text = state.streamUrl ?: "—"
         binding.copyUrlButton.isEnabled = state.streamUrl != null
         if (state.running) loadOnCastDevice(state.streamUrl) else loadedUrl = null
+        if (state.running) {
+            dlnaPending?.let { renderer ->
+                dlnaPending = null
+                playOnDlna(renderer)
+            }
+        } else if (activeDlna != null) {
+            activeDlna = null
+            binding.dlnaStatus.setText(R.string.dlna_hint)
+            renderDlnaList()
+        }
         renderCast()
     }
 
@@ -264,6 +364,9 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MainActivity"
+
+        /** Lecteur DLNA en cours de lecture (conservé si l'activité est recréée). */
+        private var activeDlna: DlnaRenderer? = null
 
         private val BLUETOOTH_OUTPUT_TYPES = buildSet {
             add(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)

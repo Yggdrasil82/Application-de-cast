@@ -8,10 +8,14 @@ import java.util.concurrent.CopyOnWriteArraySet
 object StreamState {
     data class Snapshot(
         val running: Boolean = false,
-        val streamUrl: String? = null,
+        /** Adresse du serveur local, ex. http://192.168.1.20:8765 (null sans Wi-Fi). */
+        val baseUrl: String? = null,
         val clients: Int = 0,
         val error: String? = null,
-    )
+    ) {
+        /** Flux AAC : Google Cast, VLC, navigateurs. */
+        val streamUrl: String? get() = baseUrl?.let { it + StreamFormat.AAC.path }
+    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val listeners = CopyOnWriteArraySet<(Snapshot) -> Unit>()

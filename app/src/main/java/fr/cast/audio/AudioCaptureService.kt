@@ -158,8 +158,9 @@ class AudioCaptureService : Service() {
             captureLoop(record, streamServer)
         }
 
-        val url = ip?.let { "http://$it:$PORT/stream.aac" }
-        StreamState.update { it.copy(running = true, streamUrl = url, error = null) }
+        val baseUrl = ip?.let { "http://$it:$PORT" }
+        StreamState.update { it.copy(running = true, baseUrl = baseUrl, error = null) }
+        val url = StreamState.current.streamUrl
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
             buildNotification(url?.let { getString(R.string.notification_running, it) }
@@ -168,7 +169,16 @@ class AudioCaptureService : Service() {
     }
 
     private fun captureLoop(record: AudioRecord, streamServer: StreamServer) {
-        val encoder = AacEncoder(SAMPLE_RATE, CHANNELS, BIT_RATE) { frame -> streamServer.broadcast(frame) }
+        val encoder = AacEncoder(SAMPLE_RATE, CHANNELS, BIT_RATE) { frame ->
+            streamServer.broadcast(StreamFormat.AAC, frame)
+        }
+        // Le PCM brut alimente à la fois l'encodeur AAC et le flux WAV (format imposé par la norme DLNA).
+        fun feed(pcm: ByteArray, length: Int) {
+            encoder.encode(pcm, length)
+            if (streamServer.hasClients(StreamFormat.WAV)) {
+                streamServer.broadcast(StreamFormat.WAV, pcm.copyOf(length))
+            }
+        }
         val buffer = ByteArray(FRAME_BYTES)
         val silence = ByteArray(FRAME_BYTES)
         val bytesPerSecond = SAMPLE_RATE * CHANNELS * 2L
@@ -179,7 +189,7 @@ class AudioCaptureService : Service() {
             while (capturing) {
                 val read = record.read(buffer, 0, buffer.size, AudioRecord.READ_NON_BLOCKING)
                 if (read > 0) {
-                    encoder.encode(buffer, read)
+                    feed(buffer, read)
                     fedBytes += read
                     continue
                 }
@@ -191,7 +201,7 @@ class AudioCaptureService : Service() {
                 // on injecte du silence pour que le flux reste continu (sinon l'enceinte coupe).
                 val expected = (System.nanoTime() - startNs) * bytesPerSecond / 1_000_000_000L
                 if (expected - fedBytes > bytesPerSecond / 5) {
-                    encoder.encode(silence, silence.size)
+                    feed(silence, silence.size)
                     fedBytes += silence.size
                 } else {
                     Thread.sleep(5)
@@ -234,7 +244,7 @@ class AudioCaptureService : Service() {
         projection = null
         wakeLock?.takeIf { it.isHeld }?.release()
         wifiLock?.takeIf { it.isHeld }?.release()
-        StreamState.update { it.copy(running = false, streamUrl = null, clients = 0) }
+        StreamState.update { it.copy(running = false, baseUrl = null, clients = 0) }
         super.onDestroy()
     }
 

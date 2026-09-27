@@ -9,20 +9,31 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+/** Formats de flux proposés par le serveur. */
+enum class StreamFormat(val path: String, val mimeType: String) {
+    /** AAC-LC en trames ADTS : léger, lu par Google Cast, VLC, les navigateurs. */
+    AAC("/stream.aac", "audio/aac"),
+
+    /** PCM 16 bits en WAV sans fin : format audio obligatoire des lecteurs DLNA, le plus compatible. */
+    WAV("/stream.wav", "audio/wav"),
+}
+
 /**
- * Mini serveur HTTP qui diffuse en continu les trames AAC (ADTS) à tous les clients connectés
- * (enceinte Google Cast, VLC, navigateur…).
+ * Mini serveur HTTP qui diffuse le son en continu à tous les clients connectés
+ * (enceinte Google Cast, lecteur DLNA, VLC, navigateur…).
  */
 class StreamServer(
     private val port: Int,
     private val onClientsChanged: (Int) -> Unit,
 ) {
-    private class Client(val socket: Socket) {
+    private class Client(val socket: Socket, val format: StreamFormat) {
         // Petite file : si un client prend du retard, on jette les vieilles trames pour limiter la latence.
         val queue = ArrayBlockingQueue<ByteArray>(QUEUE_SIZE)
     }
@@ -64,9 +75,12 @@ class StreamServer(
         onClientsChanged(0)
     }
 
-    /** Envoie une trame ADTS complète à tous les clients. */
-    fun broadcast(frame: ByteArray) {
+    fun hasClients(format: StreamFormat) = clients.any { it.format == format }
+
+    /** Envoie un bloc (trame ADTS complète ou PCM) aux clients du format donné. */
+    fun broadcast(format: StreamFormat, frame: ByteArray) {
         for (client in clients) {
+            if (client.format != format) continue
             if (!client.queue.offer(frame)) {
                 client.queue.clear()
                 client.queue.offer(frame)
@@ -96,9 +110,14 @@ class StreamServer(
                     closeQuietly(socket)
                 }
                 path.startsWith("/stream") -> {
-                    writeHeaders(out, "200 OK", "audio/aac")
+                    val format = if (path.endsWith(".wav")) StreamFormat.WAV else StreamFormat.AAC
+                    writeHeaders(out, "200 OK", format.mimeType, dlna = true)
                     if (method == "HEAD") return closeQuietly(socket)
-                    stream(socket, out)
+                    if (format == StreamFormat.WAV) {
+                        out.write(wavHeader())
+                        out.flush()
+                    }
+                    stream(socket, out, format)
                 }
                 path == "/" -> {
                     val body = INDEX_HTML.toByteArray(Charsets.UTF_8)
@@ -117,8 +136,8 @@ class StreamServer(
         }
     }
 
-    private fun stream(socket: Socket, out: OutputStream) {
-        val client = Client(socket)
+    private fun stream(socket: Socket, out: OutputStream, format: StreamFormat) {
+        val client = Client(socket, format)
         clients.add(client)
         onClientsChanged(clients.size)
         Log.i(TAG, "Client connecté : ${socket.inetAddress.hostAddress}")
@@ -144,7 +163,13 @@ class StreamServer(
         }
     }
 
-    private fun writeHeaders(out: OutputStream, status: String, contentType: String?, length: Int? = null) {
+    private fun writeHeaders(
+        out: OutputStream,
+        status: String,
+        contentType: String?,
+        length: Int? = null,
+        dlna: Boolean = false,
+    ) {
         val sb = StringBuilder()
             .append("HTTP/1.1 ").append(status).append("\r\n")
             .append("Server: AudioCast\r\n")
@@ -155,6 +180,11 @@ class StreamServer(
             .append("Connection: close\r\n")
         if (contentType != null) sb.append("Content-Type: ").append(contentType).append("\r\n")
         if (length != null) sb.append("Content-Length: ").append(length).append("\r\n")
+        if (dlna) {
+            // En-têtes attendus par de nombreux lecteurs DLNA (flux en direct, non navigable).
+            sb.append("transferMode.dlna.org: Streaming\r\n")
+            sb.append("contentFeatures.dlna.org: ").append(DLNA_FEATURES).append("\r\n")
+        }
         sb.append("\r\n")
         out.write(sb.toString().toByteArray(Charsets.ISO_8859_1))
         out.flush()
@@ -167,8 +197,31 @@ class StreamServer(
         }
     }
 
+    /** En-tête WAV d'un flux PCM 16 bits de longueur inconnue (tailles au maximum). */
+    private fun wavHeader(): ByteArray {
+        val sampleRate = AudioCaptureService.SAMPLE_RATE
+        val channels = AudioCaptureService.CHANNELS
+        val byteRate = sampleRate * channels * 2
+        return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+            put("RIFF".toByteArray(Charsets.US_ASCII))
+            putInt(-1) // 0xFFFFFFFF : taille inconnue
+            put("WAVE".toByteArray(Charsets.US_ASCII))
+            put("fmt ".toByteArray(Charsets.US_ASCII))
+            putInt(16)
+            putShort(1) // PCM
+            putShort(channels.toShort())
+            putInt(sampleRate)
+            putInt(byteRate)
+            putShort((channels * 2).toShort())
+            putShort(16)
+            put("data".toByteArray(Charsets.US_ASCII))
+            putInt(-1)
+        }.array()
+    }
+
     companion object {
         private const val TAG = "StreamServer"
+        const val DLNA_FEATURES = "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
         private const val QUEUE_SIZE = 64 // ≈ 1,4 s d'audio à 48 kHz
 
         private const val INDEX_HTML = """<!doctype html>
@@ -179,7 +232,7 @@ class StreamServer(
 <h1>AudioCast</h1>
 <p>Son du téléphone en direct</p>
 <audio src="/stream.aac" controls autoplay></audio>
-<p>URL du flux : <code>/stream.aac</code> (utilisable dans VLC, Kodi…)</p>
+<p>Flux : <code>/stream.aac</code> (AAC) ou <code>/stream.wav</code> (WAV) — utilisables dans VLC, Kodi…</p>
 </body></html>"""
     }
 }

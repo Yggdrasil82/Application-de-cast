@@ -28,6 +28,17 @@
     <string name="bluetooth_output_switcher">Choisir la sortie audio</string>
     <string name="bluetooth_settings">Réglages Bluetooth</string>
 
+    <string name="section_dlna">DLNA / UPnP (Sonos, Freebox, TV, amplis…)</string>
+    <string name="dlna_hint">Recherchez les lecteurs DLNA du réseau Wi-Fi puis touchez celui qui doit jouer le son.</string>
+    <string name="dlna_search">Rechercher les appareils</string>
+    <string name="dlna_searching">Recherche en cours…</string>
+    <string name="dlna_none">Aucun lecteur DLNA trouvé. Vérifiez que l’appareil est allumé et sur le même Wi-Fi.</string>
+    <string name="dlna_found">Touchez un appareil pour y envoyer le son :</string>
+    <string name="dlna_connecting">Envoi vers « %1$s »…</string>
+    <string name="dlna_playing">Lecture sur « %1$s » (%2$s)</string>
+    <string name="dlna_failed">« %1$s » a refusé le flux : %2$s</string>
+    <string name="dlna_no_wifi">Aucun réseau Wi-Fi : impossible d’envoyer le flux.</string>
+
     <string name="other_hint">Ouvrez cette adresse dans n’importe quel lecteur du même réseau Wi-Fi :</string>
     <string name="copy_url">Copier</string>
     <string name="url_copied">Adresse copiée</string>
