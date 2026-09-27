@@ -34,6 +34,7 @@
         <item name="android:paddingEnd">8dp</item>
         <item name="iconPadding">6dp</item>
         <item name="iconSize">18dp</item>
+        <item name="iconGravity">textStart</item>
     </style>
 
     <!-- Bouton « Diffuser » d'une enceinte -->
