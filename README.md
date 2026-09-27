@@ -48,6 +48,11 @@ ports de contrôle et de timing, renvoi des paquets perdus. Latence d'environ 2 
 3. Touchez une enceinte : la capture démarre, acceptez la demande d'Android puis lancez votre musique.
    Touchez à nouveau l'enceinte pour l'arrêter ; le gros bouton arrête tout.
 4. Appui long sur un appareil DLNA pour choisir soi-même le format.
+   Un appareil qui propose aussi l'AirPlay (ex. Freebox Player) n'apparaît qu'une fois, en AirPlay.
+   Le curseur sous l'enceinte active règle son volume (AirPlay, Google Cast) ; « Reprendre sur … »
+   relance la dernière enceinte utilisée ; le mot de passe AirMedia est demandé une fois puis retenu.
+   « Couper le son du téléphone » coupe le haut-parleur du téléphone pendant la diffusion
+   (sur certains téléphones cela coupe aussi la capture : désactivez-le si « Aucun son capté »).
 5. Section **Avancé** : adresse du flux pour VLC / navigateur, et journal de diagnostic.
 
 Pour une enceinte Bluetooth, il suffit de l'appairer dans les réglages Android : le téléphone y envoie

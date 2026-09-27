@@ -15,6 +15,15 @@
     </plurals>
     <string name="status_error">Erreur</string>
     <string name="resync">Resynchroniser</string>
+    <string name="mute_local">Couper le son du téléphone</string>
+    <string name="resume_last">Reprendre sur « %1$s »</string>
+    <string name="resume_not_found">« %1$s » n’est pas (encore) détectée sur le Wi-Fi.</string>
+    <string name="volume">Volume</string>
+    <string name="level_silent_muted">Aucun son capté. Si la musique joue déjà, désactivez « Couper le son du téléphone » : sur certains téléphones, couper le son coupe aussi la capture.</string>
+    <string name="airplay_password_title">Mot de passe AirPlay</string>
+    <string name="airplay_password_message">« %1$s » demande le mot de passe AirMedia / AirPlay réglé sur l’appareil.</string>
+    <string name="airplay_password_wrong">Mot de passe refusé par « %1$s ». Réessayez :</string>
+    <string name="airplay_password_hint">Mot de passe</string>
     <string name="resync_log">Resynchronisation demandée</string>
     <string name="level_ok">Son capté</string>
     <string name="level_silent">Aucun son capté : lancez une musique. Si elle joue déjà, son application bloque peut-être la capture.</string>

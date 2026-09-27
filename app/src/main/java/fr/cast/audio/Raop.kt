@@ -11,6 +11,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.security.KeyFactory
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.security.spec.RSAPublicKeySpec
 import javax.crypto.Cipher
@@ -24,7 +25,18 @@ import kotlin.concurrent.thread
  *
  * Le PCM attendu est en 16 bits stéréo little-endian à 44,1 kHz.
  */
-class RaopSession(private val device: AirPlayDevice, private val log: (String) -> Unit) {
+class RaopSession(
+    private val device: AirPlayDevice,
+    private val log: (String) -> Unit,
+    private val password: String? = null,
+    /** Volume de départ, de 0 à 100. */
+    initialVolume: Int = DEFAULT_VOLUME,
+) {
+    /** Authentification HTTP Digest (royaume, nonce) une fois le défi du récepteur reçu. */
+    private var digest: Pair<String, String>? = null
+
+    @Volatile
+    private var volume = initialVolume
 
     private val random = SecureRandom()
     private val audioSocket = DatagramSocket()
@@ -121,7 +133,7 @@ class RaopSession(private val device: AirPlayDevice, private val log: (String) -
         request("RECORD", url, mapOf("Range" to "npt=0-", "RTP-Info" to "seq=$seq;rtptime=$rtpTime"))
         request(
             "SET_PARAMETER", url, mapOf("Content-Type" to "text/parameters"),
-            "volume: $INITIAL_VOLUME\r\n",
+            "volume: ${airplayVolume(volume)}\r\n",
         )
         thread(name = "raop-sync", isDaemon = true) {
             while (running) {
@@ -136,6 +148,16 @@ class RaopSession(private val device: AirPlayDevice, private val log: (String) -
             }
         }
         log("AirPlay : lecture démarrée sur ${device.name}")
+    }
+
+    /** Règle le volume du récepteur, de 0 à 100 (bloquant : hors du thread principal). */
+    fun setVolume(percent: Int) {
+        volume = percent.coerceIn(0, 100)
+        if (!running) return
+        request(
+            "SET_PARAMETER", url, mapOf("Content-Type" to "text/parameters"),
+            "volume: ${airplayVolume(volume)}\r\n",
+        )
     }
 
     fun stop() {
@@ -304,6 +326,7 @@ class RaopSession(private val device: AirPlayDevice, private val log: (String) -
             .append("DACP-ID: $clientInstance\r\n")
             .append("Active-Remote: 1986535575\r\n")
         session?.let { head.append("Session: $it\r\n") }
+        authorization(method, uri)?.let { head.append("Authorization: $it\r\n") }
         extraHeaders.forEach { (name, value) -> head.append("$name: $value\r\n") }
         if (bodyBytes != null) head.append("Content-Length: ${bodyBytes.size}\r\n")
         head.append("\r\n")
@@ -313,10 +336,34 @@ class RaopSession(private val device: AirPlayDevice, private val log: (String) -
         out.flush()
 
         val response = readResponse(socket.getInputStream())
-        if (response.code == 401) throw IOException("mot de passe AirPlay requis")
+        if (response.code == 401) {
+            val challenge = response.headers["www-authenticate"].orEmpty()
+            val alreadyTried = digest != null
+            if (password.isNullOrEmpty()) throw AirPlayPasswordException(wrong = false)
+            if (alreadyTried || !challenge.startsWith("Digest", ignoreCase = true)) {
+                throw AirPlayPasswordException(wrong = true)
+            }
+            val realm = Regex("realm=\"([^\"]*)\"").find(challenge)?.groupValues?.get(1).orEmpty()
+            val nonce = Regex("nonce=\"([^\"]*)\"").find(challenge)?.groupValues?.get(1).orEmpty()
+            digest = realm to nonce
+            return request(method, uri, extraHeaders, body) // même requête, authentifiée
+        }
         if (response.code != 200) throw IOException("$method : ${response.code} ${response.message}")
         return response
     }
+
+    /** En-tête « Authorization: Digest … » (utilisateur « iTunes », MD5) une fois le défi reçu. */
+    private fun authorization(method: String, uri: String): String? {
+        val (realm, nonce) = digest ?: return null
+        val secret = password ?: return null
+        val ha1 = md5("iTunes:$realm:$secret")
+        val ha2 = md5("$method:$uri")
+        val response = md5("$ha1:$nonce:$ha2")
+        return "Digest username=\"iTunes\", realm=\"$realm\", nonce=\"$nonce\", uri=\"$uri\", response=\"$response\""
+    }
+
+    private fun md5(text: String): String =
+        MessageDigest.getInstance("MD5").digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 
     private fun readResponse(input: InputStream): Response {
         val statusLine = readLine(input) ?: throw IOException("connexion fermée par le récepteur")
@@ -396,8 +443,14 @@ class RaopSession(private val device: AirPlayDevice, private val log: (String) -
         /** Retard de lecture demandé au récepteur : 2 s, comme Google Cast. */
         private const val LATENCY_FRAMES = 88_200L
 
-        /** Volume AirPlay de −30 (min) à 0 (max) : un niveau modéré au départ. */
-        private const val INITIAL_VOLUME = "-15.000000"
+        /** Volume de départ (0 à 100) : un niveau modéré. */
+        const val DEFAULT_VOLUME = 50
+
+        /** Volume AirPlay en dB : −30 (min) à 0 (max), −144 = muet. */
+        fun airplayVolume(percent: Int): String {
+            val db = if (percent <= 0) -144.0 else -30.0 + 30.0 * percent / 100.0
+            return "%.6f".format(java.util.Locale.US, db)
+        }
 
         private const val NTP_EPOCH_OFFSET = 2_208_988_800L
 
@@ -452,3 +505,8 @@ class RaopSession(private val device: AirPlayDevice, private val log: (String) -
         fun toByteArray(): ByteArray = out.copyOf(if (bitPos == 0) bytePos else bytePos + 1)
     }
 }
+
+/** Le récepteur exige un mot de passe (AirMedia protégé) : [wrong] si celui fourni est refusé. */
+class AirPlayPasswordException(val wrong: Boolean) : IOException(
+    if (wrong) "mot de passe AirPlay refusé" else "mot de passe AirPlay requis"
+)

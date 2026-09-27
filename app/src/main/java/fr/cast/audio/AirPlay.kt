@@ -130,10 +130,15 @@ object AirPlaySessions {
         private set
 
     /** Ouvre une session (bloquant : à appeler hors du thread principal). */
-    fun start(device: AirPlayDevice, log: (String) -> Unit) {
+    fun start(device: AirPlayDevice, log: (String) -> Unit, password: String?, volume: Int) {
         stop()
-        val session = RaopSession(device, log)
-        session.start()
+        val session = RaopSession(device, log, password, volume)
+        try {
+            session.start()
+        } catch (e: Exception) {
+            thread(name = "raop-stop", isDaemon = true) { session.stop() }
+            throw e
+        }
         active = session
         AudioCaptureService.pcmSinks.add(session.sink)
     }

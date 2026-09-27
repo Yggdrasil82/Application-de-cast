@@ -167,6 +167,7 @@ class AudioCaptureService : Service() {
         StreamState.update { it.copy(running = true, baseUrl = baseUrl, error = null) }
         val url = StreamState.current.streamUrl
         StreamState.log("Diffusion démarrée : ${baseUrl ?: "aucune adresse Wi-Fi détectée"}")
+        if (Prefs(this).muteLocal) LocalMute.apply(this, mute = true)
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
             buildNotification(url?.let { getString(R.string.notification_running, it) }
@@ -280,6 +281,7 @@ class AudioCaptureService : Service() {
     override fun onDestroy() {
         val wasRunning = server != null
         AirPlaySessions.stop()
+        LocalMute.apply(this, mute = false)
         capturing = false
         captureThread?.interrupt()
         captureThread?.join(1000)
